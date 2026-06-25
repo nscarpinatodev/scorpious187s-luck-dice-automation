@@ -1,4 +1,4 @@
-// ── Luck Dice Automation — Saving Throws ─────────────────────────────────────
+// ── Scorpious187's Luck Dice Automation — Saving Throws ──────────────────────
 // Nat-1 prompt for manual saving throws triggered via the skill check launcher.
 // Depends on: core.js and skill-check.js (must be loaded first).
 

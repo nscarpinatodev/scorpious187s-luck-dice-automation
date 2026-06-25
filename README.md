@@ -1,1 +1,1 @@
-"# luck-dice-automation" 
+# Scorpious187's Luck Dice Automation

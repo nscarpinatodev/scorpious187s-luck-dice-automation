@@ -1,4 +1,4 @@
-// ── Luck Dice Automation — Attack & Damage ────────────────────────────────────
+// ── Scorpious187's Luck Dice Automation — Attack & Damage ─────────────────────
 // All attack-roll manipulation, chat-card history rendering, and Midi-QoL hooks.
 // Depends on: core.js (must be loaded first).
 
@@ -807,7 +807,7 @@ async function updateMidiSaveCardForActor(workflow, actor, uuid) {
 Hooks.once("ready", () => {
   console.log(`[${MODULE_ID}] attack.js ready — midi-qol active=${game.modules.get("midi-qol")?.active ?? false}`);
   if (!game.modules.get("midi-qol")?.active) {
-    ui.notifications?.warn("Luck Dice Automation requires Midi-QoL.");
+    ui.notifications?.warn("Scorpious187's Luck Dice Automation requires Midi-QoL.");
     return;
   }
 
@@ -1220,8 +1220,6 @@ Hooks.once("ready", () => {
         console.error(`[${MODULE_ID}] preDeleteActiveEffect conc error:`, err);
         pending.shouldDelete = true;
       } finally {
-        // Remove entry FIRST so the re-delete below isn't intercepted again.
-        pendingConcentrationPrompts.delete(actor.id);
         pending.resolve();
         if (pending.shouldDelete) {
           const concEffect =
@@ -1231,6 +1229,12 @@ Hooks.once("ready", () => {
               /concentrat/i.test(e.name  ?? "") ||
               /concentrat/i.test(e.label ?? ""));
           if (concEffect) {
+            // Keep the pending guard set across this delete. The call re-enters
+            // this hook synchronously; the pendingConcentrationPrompts guard above
+            // short-circuits it (returns undefined, NOT false) so the deletion
+            // proceeds instead of re-prompting. Clearing the guard before this
+            // point caused the re-delete to be re-intercepted, looping forever and
+            // handing out a Luck Die on every pass when no dice remained.
             await concEffect.delete();
             console.log(`[${MODULE_ID}] preDeleteActiveEffect: concentration removed for ${actor.name} after failed luck dice`);
           } else {
@@ -1239,6 +1243,9 @@ Hooks.once("ready", () => {
         } else {
           console.log(`[${MODULE_ID}] preDeleteActiveEffect: ${actor.name} KEPT concentration via luck dice`);
         }
+        // Clear the guard only AFTER the re-delete completes, so our own delete
+        // above is allowed through rather than re-intercepted.
+        pendingConcentrationPrompts.delete(actor.id);
       }
     })();
 

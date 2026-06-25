@@ -1,4 +1,4 @@
-// ── Luck Dice Automation — Skill Check Flow ───────────────────────────────────
+// ── Scorpious187's Luck Dice Automation — Skill Check Flow ────────────────────
 // GM launcher UI, socket-based roll dispatch, and luck dice prompts for
 // failed skill / ability checks.
 // Depends on: core.js (must be loaded first).
@@ -278,7 +278,7 @@ async function dispatchCheckRequests(actorIds, checkValue, dc, showDC = false, a
   const gmCardMsg = await ChatMessage.create({
     content: buildGMCheckCard(label, dc, statuses),
     whisper: game.users.filter(u => u.isGM).map(u => u.id),
-    speaker: { alias: "Luck Dice Automation" },
+    speaker: { alias: "Scorpious187's Luck Dice Automation" },
     flags:   { [MODULE_ID]: { checkCard: { label, dc, statuses } } }
   });
   const gmCardId = gmCardMsg?.id ?? null;

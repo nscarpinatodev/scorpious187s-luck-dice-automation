@@ -1,10 +1,10 @@
-// ── Luck Dice Automation — Core ───────────────────────────────────────────────
+// ── Scorpious187's Luck Dice Automation — Core ────────────────────────────────
 // Shared constants, dice helpers, dialog utilities, and settings registration.
 // Loaded first; attack.js and skill-check.js depend on everything defined here.
 
 window.LDA = (() => {
 
-const MODULE_ID = "luck-dice-automation";
+const MODULE_ID = "scorpious187s-luck-dice-automation";
 const LUCK_DICE_ITEM_NAME  = "Luck Dice";
 const IMPACT_DICE_ITEM_NAME = "Impact Dice";
 
@@ -307,7 +307,7 @@ async function whisperLuckRegain(actor, reason) {
   await ChatMessage.create({
     content: `<p><strong>${actor.name}</strong> regained 1 Luck Die (${reason}).</p>`,
     whisper: recipients,
-    speaker: { alias: "Luck Dice Automation" }
+    speaker: { alias: "Scorpious187's Luck Dice Automation" }
   });
 }
 
@@ -415,7 +415,7 @@ Hooks.once("init", () => {
 
   game.settings.register(MODULE_ID, "debug", {
     name: "Debug Logging",
-    hint: "Print detailed Luck Dice Automation messages to the browser console. " +
+    hint: "Print detailed Scorpious187's Luck Dice Automation messages to the browser console. " +
           "Leave off in normal play.",
     scope: "world",
     config: true,
