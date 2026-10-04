@@ -29,8 +29,12 @@ console.log(`[${MODULE_ID}] saving-throw.js parsed — user=${game?.user?.name ?
  * Inspiration blocks luck dice: if inspiration is used the chain stops.
  *
  * Returns { finalTotal, passed } or null (cancelled / could not spend).
+ *
+ * reporter: optional async (entry) => void. When given (Midi saves), each reroll
+ * is reported to it — for display on Midi's card — instead of being written to a
+ * roll card here. entry: { label, total, detail }.
  */
-async function promptNatOneSave(actor, rollTotal, dc, originalRoll, rollMsgId, rollMsgContent, showDC = true) {
+async function promptNatOneSave(actor, rollTotal, dc, originalRoll, rollMsgId, rollMsgContent, showDC = true, reporter = null) {
   if (!game.user.isGM && actor.hasPlayerOwner && !actor.isOwner) return null;
 
   const luckEnabled = isLuckDiceEnabled();
@@ -71,8 +75,17 @@ async function promptNatOneSave(actor, rollTotal, dc, originalRoll, rollMsgId, r
     return { finalTotal: rollTotal, passed: false };
   }
 
-  // Helper: append a reroll section to the roll card and return [msgId, content].
+  // Helper: show a reroll — report it when a reporter is given, otherwise append
+  // a section to the roll card. Returns [msgId, content] for the luck loop.
   async function applyRerollSection(newRoll, sectionLabel) {
+    if (reporter) {
+      await reporter({
+        label:  sectionLabel === "Luck Dice" ? "Rerolled with 2 Luck Dice" : `Rerolled with ${sectionLabel}`,
+        total:  Number(newRoll.total ?? 0),
+        detail: `d20: ${getKeptD20Result(newRoll) ?? "?"}`
+      });
+      return [rollMsgId, rollMsgContent];
+    }
     const rerollHtml    = await newRoll.render();
     const rerollSection = `
       <div style="border-top:1px solid #aaa;margin-top:4px;padding-top:4px">
@@ -111,7 +124,7 @@ async function promptNatOneSave(actor, rollTotal, dc, originalRoll, rollMsgId, r
     // Still failing — hand off to the full luck-dice loop (add-dice now available).
     return await promptLuckOnCheckFail(
       actor, newTotal, dc, newMsgId, newContent, newRoll,
-      "Failed Saving Throw", "saving throw", showDC
+      "Failed Saving Throw", "saving throw", showDC, reporter
     );
   }
 

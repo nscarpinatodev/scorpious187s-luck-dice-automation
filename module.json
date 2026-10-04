@@ -4,8 +4,8 @@
   "description": "Automates Luck Dice prompts for attacks, damage, and failed checks/saves with Midi-QoL.",
   "version": "1.2.0",
   "compatibility": {
-    "minimum": "13",
-    "verified": "14.364"
+    "minimum": "14.368",
+    "verified": "14.368"
   },
   "authors": [
     {
@@ -38,14 +38,18 @@
         "id": "dnd5e",
         "type": "system",
         "compatibility": {
-          "minimum": "5.2.5"
+          "minimum": "6.0.0",
+          "verified": "6.0.5"
         }
       }
     ],
     "requires": [
       {
         "id": "midi-qol",
-        "type": "module"
+        "type": "module",
+        "compatibility": {
+          "minimum": "14.6.0"
+        }
       },
       {
         "id": "scorpious187s-lib",

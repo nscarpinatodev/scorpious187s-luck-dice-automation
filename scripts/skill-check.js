@@ -7,7 +7,7 @@
 const LDA = window.LDA;
 const {
   MODULE_ID, LUCK_DICE_ITEM_NAME, IMPACT_DICE_ITEM_NAME,
-  workflowState, clamp, debug,
+  workflowState, pendingMidiSaveResults, clamp, debug,
   getDiceUses, updateLuckUses, actorHasLuckDice,
   promptChoice, promptSlider, getKeptD20Result, spendDiceFromPools,
   evaluateReroll, buildDiceAvailableHTML, whisperLuckRegain,
@@ -438,7 +438,12 @@ async function rollSkillForCheck(actor, checkValue, dc, showDC = false, gmCardId
 
 // ── Luck dice prompt for failed checks ───────────────────────────────────────
 
-async function promptLuckOnCheckFail(actor, rollTotal, dc, rollMsgId = null, rollMsgContent = "", originalRoll = null, dialogTitle = "Failed Skill Check", rollType = "skill check", showDC = true) {
+/**
+ * reporter: optional async (entry) => void. When given (Midi saves), each reroll
+ * or add-dice step is reported to it — for display on Midi's card — instead of
+ * being written to a roll card here. entry: { label, total, detail }.
+ */
+async function promptLuckOnCheckFail(actor, rollTotal, dc, rollMsgId = null, rollMsgContent = "", originalRoll = null, dialogTitle = "Failed Skill Check", rollType = "skill check", showDC = true, reporter = null) {
   // Permission guard: only the actor's owner (or GM) may see the dialog.
   if (!game.user.isGM && actor.hasPlayerOwner && !actor.isOwner) return;
 
@@ -469,6 +474,28 @@ async function promptLuckOnCheckFail(actor, rollTotal, dc, rollMsgId = null, rol
   let currentBaseMsgContent = rollMsgContent;
   let hasRerolled           = false;        // true once a luck dice reroll has been made
   let inspirationUsed       = false;        // true once inspiration has been consumed
+
+  // Show a reroll: report it when a reporter is given, otherwise append it to
+  // the roll card (or a new card) immediately so the player sees the new total.
+  async function showReroll(newRoll, cardLabel, reportLabel) {
+    if (reporter) {
+      await reporter({ label: reportLabel, total: Number(newRoll.total ?? 0), detail: `d20: ${getKeptD20Result(newRoll) ?? "?"}` });
+      return;
+    }
+    const rerollHtml = await newRoll.render();
+    currentBaseMsgContent += `
+        <div style="border-top:1px solid #aaa;margin-top:4px;padding-top:4px">
+          <p style="margin:0 0 4px;font-size:0.85em;opacity:0.7">${cardLabel}:</p>
+          ${rerollHtml}
+        </div>`;
+    const existingMsg = bonusMsgId ? game.messages.get(bonusMsgId) : null;
+    if (existingMsg) {
+      await existingMsg.update({ content: currentBaseMsgContent });
+    } else {
+      const msg = await ChatMessage.create({ content: currentBaseMsgContent, speaker: { alias: actor.name } });
+      bonusMsgId = msg?.id ?? null;
+    }
+  }
 
   while (currentTotal < dc) {
     const curLuck   = luckEnabled ? getDiceUses(actor, LUCK_DICE_ITEM_NAME)   : 0;
@@ -532,27 +559,12 @@ async function promptLuckOnCheckFail(actor, rollTotal, dc, rollMsgId = null, rol
       await consumeInspiration(actor);
       inspirationUsed = true;
 
-      const newRoll    = await evaluateInspirationReroll(currentRoll);
-      const rerollHtml = await newRoll.render();
-      const rerollSection = `
-        <div style="border-top:1px solid #aaa;margin-top:4px;padding-top:4px">
-          <p style="margin:0 0 4px;font-size:0.85em;opacity:0.7">Rerolled with Inspiration:</p>
-          ${rerollHtml}
-        </div>`;
-
-      currentBaseMsgContent = currentBaseMsgContent + rerollSection;
+      const newRoll = await evaluateInspirationReroll(currentRoll);
       baseTotal    = Number(newRoll.total ?? 0);
       currentTotal = baseTotal;
       currentRoll  = newRoll;
       allBonusRolls = [];
-
-      const existingMsg = bonusMsgId ? game.messages.get(bonusMsgId) : null;
-      if (existingMsg) {
-        await existingMsg.update({ content: currentBaseMsgContent });
-      } else {
-        const msg = await ChatMessage.create({ content: currentBaseMsgContent, speaker: { alias: actor.name } });
-        bonusMsgId = msg?.id ?? null;
-      }
+      await showReroll(newRoll, "Rerolled with Inspiration", "Rerolled with Inspiration");
 
       if (currentTotal >= dc) return { finalTotal: currentTotal, passed: true }; // passed on the inspiration reroll
     }
@@ -561,29 +573,13 @@ async function promptLuckOnCheckFail(actor, rollTotal, dc, rollMsgId = null, rol
       const spent = await spendDiceFromPools(actor, 2);
       if (spent < 2) return null;
 
-      const newRoll    = await evaluateReroll(currentRoll);
-      const rerollHtml = await newRoll.render();
-      const rerollSection = `
-        <div style="border-top:1px solid #aaa;margin-top:4px;padding-top:4px">
-          <p style="margin:0 0 4px;font-size:0.85em;opacity:0.7">Rerolled with Luck Dice:</p>
-          ${rerollHtml}
-        </div>`;
-
-      currentBaseMsgContent = currentBaseMsgContent + rerollSection;
+      const newRoll = await evaluateReroll(currentRoll);
       baseTotal    = Number(newRoll.total ?? 0);
       currentTotal = baseTotal;
       currentRoll  = newRoll;
       allBonusRolls = [];
       hasRerolled   = true;
-
-      // Update the card immediately to show the reroll.
-      const existingMsg = bonusMsgId ? game.messages.get(bonusMsgId) : null;
-      if (existingMsg) {
-        await existingMsg.update({ content: currentBaseMsgContent });
-      } else {
-        const msg = await ChatMessage.create({ content: currentBaseMsgContent, speaker: { alias: actor.name } });
-        bonusMsgId = msg?.id ?? null;
-      }
+      await showReroll(newRoll, "Rerolled with Luck Dice", "Rerolled with 2 Luck Dice");
 
       if (currentTotal >= dc) return { finalTotal: currentTotal, passed: true }; // passed on the reroll
     }
@@ -607,7 +603,12 @@ async function promptLuckOnCheckFail(actor, rollTotal, dc, rollMsgId = null, rol
       allBonusRolls.push(bonusRoll);
       currentTotal += bonusRoll.total;
 
-      bonusMsgId = await postCheckBonus(actor, baseTotal, allBonusRolls, currentTotal, dc, bonusMsgId, currentBaseMsgContent, rollType, showDC);
+      if (reporter) {
+        const faces = (bonusRoll.dice ?? []).flatMap(d => (d.results ?? []).filter(r => r.active !== false).map(r => r.result));
+        await reporter({ label: `Added ${diceCount}d6 Luck Dice`, total: currentTotal, detail: `${faces.join(", ")} = +${bonusRoll.total}` });
+      } else {
+        bonusMsgId = await postCheckBonus(actor, baseTotal, allBonusRolls, currentTotal, dc, bonusMsgId, currentBaseMsgContent, rollType, showDC);
+      }
 
       if (currentTotal >= dc) return { finalTotal: currentTotal, passed: true }; // passed — loop exits
       // Still failing — loop back to offer more dice.
@@ -687,14 +688,20 @@ Hooks.once("ready", () => {
       await rollSkillForCheck(actor, data.checkValue, data.dc, data.showDC ?? false, data.gmCardId ?? null, data.advantageMode ?? "normal");
 
     } else if (data?.type === "midiSaveFailed") {
-      // Player client: show the luck dice prompt, then report the result back to GM.
+      // Player client: show the luck dice prompt, sending each step back so the GM
+      // can show it on Midi's card (which this client can't write to), then
+      // report the result.
       const actor = game.actors.get(data.actorId);
       if (!actor || game.user.isGM || !actor.isOwner) return;
       debug(`skill-check socket: received midiSaveFailed for ${actor.name}`);
+      const reporter = (entry) => game.socket.emit(`module.${MODULE_ID}`, {
+        type: "midiSaveStep", actorId: actor.id, entry
+      });
       const result = await runMidiSavePrompt(
         actor, data.rollTotal, data.dc,
         data.formula ?? "1d20", data.d20Result ?? null,
-        data.rollMsgId ?? null, data.rollMsgContent ?? ""
+        data.rollMsgId ?? null, data.rollMsgContent ?? "",
+        null, reporter
       );
       game.socket.emit(`module.${MODULE_ID}`, {
         type:       "midiSaveResult",
@@ -703,8 +710,12 @@ Hooks.once("ready", () => {
         finalTotal: result?.finalTotal ?? data.rollTotal
       });
 
+    } else if (data?.type === "midiSaveStep" && game.user.isGM) {
+      // GM client: a player spent luck on a Midi save — show the step on Midi's card.
+      pendingMidiSaveResults.get(data.actorId)?.onStep?.(data.entry);
+
     } else if (data?.type === "midiSaveResult" && game.user.isGM) {
-      // GM client: resolve the pending Promise so preCheckSaves can patch tokenSaves.
+      // GM client: resolve the pending Promise so postCheckSaves can apply the pass.
       const pending = pendingMidiSaveResults.get(data.actorId);
       if (pending) {
         clearTimeout(pending.timeoutId);

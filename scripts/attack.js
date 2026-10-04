@@ -1,5 +1,13 @@
-// ── Scorpious187's Luck Dice Automation — Attack & Damage ─────────────────────
-// All attack-roll manipulation, chat-card history rendering, and Midi-QoL hooks.
+// ── Scorpious187's Luck Dice Automation — Attack, Damage & Midi Saves ─────────
+// Midi-QoL 14.6 / dnd5e 6 integration: luck dice on missed attacks and damage,
+// failed Midi saves, and failed concentration saves.
+//
+// Midi 14.6 renders its chat cards from workflow data. This module hooks in
+// after Midi has decided a result but before Midi renders or applies it
+// (midi-qol.hitsChecked, midi-qol.postCheckSaves), corrects the workflow, and
+// lets Midi draw and apply the corrected result. Luck dice spent on an attack
+// are kept in this module's flag on Midi's card and injected under the attack
+// roll at render, so every viewer sees each reroll as it happens.
 // Depends on: core.js (must be loaded first).
 
 (() => {
@@ -7,7 +15,7 @@ const LDA = window.LDA;
 const {
   MODULE_ID, LUCK_DICE_ITEM_NAME, IMPACT_DICE_ITEM_NAME,
   workflowState, pendingMidiSaveResults, clamp, debug,
-  getWorkflowKey, getState, getDiceItem, getDiceUses, updateDiceUses,
+  getWorkflowKey, getState, getDiceUses,
   updateLuckUses, actorHasLuckDice, isWorkflowResponder,
   promptChoice, promptSlider, buildFakeRoll, getKeptD20Result, spendDiceFromPools,
   evaluateReroll, buildDiceAvailableHTML, whisperLuckRegain, maybeRegainLuckDie,
@@ -17,15 +25,11 @@ const {
 
 // ── Hit state detection ───────────────────────────────────────────────────────
 
-// getKeptD20Result is defined in core.js and shared across all roll types.
-
 /**
- * Returns true (definite hit), false (definite miss), or null (uncertain).
- *
- * IMPORTANT: Midi resets workflow.hitTargets via checkHits() after AttackRollComplete
- * fires. An empty hitTargets cannot be trusted as a definite miss — only a non-empty
- * hitTargets is a reliable positive confirmation from Midi.
- * For misses (empty hitTargets) we fall back to AC comparison using workflow.attackTotal.
+ * Returns true (hit), false (miss), or null (uncertain — no targets).
+ * Only called after Midi's checkHits(), so hitTargets / hitTargetsEC are Midi's
+ * own verdict (AC, cover, flanking, reactions). A natural 20 / 1 is read from
+ * the kept d20.
  */
 function getDefiniteHitState(workflow) {
   if (!workflow?.attackRoll) return null;
@@ -34,33 +38,47 @@ function getDefiniteHitState(workflow) {
   if (d20Result === 20) return true;
   if (d20Result === 1)  return false;
 
-  const hitTargets = workflow.hitTargets instanceof Set ? workflow.hitTargets : null;
-  if (hitTargets !== null && hitTargets.size > 0) return true;
-
-  const targets = workflow.targets instanceof Set ? [...workflow.targets] : [];
-  if (targets.length !== 1) return null;
-
-  const attackTotal = Number(workflow.attackTotal ?? workflow.attackRoll?.total);
-  const targetAC    = Number(targets[0]?.actor?.system?.attributes?.ac?.value);
-  if (!Number.isFinite(attackTotal) || !Number.isFinite(targetAC)) return null;
-  return attackTotal >= targetAC;
+  const hits = (workflow.hitTargets?.size ?? 0) + (workflow.hitTargetsEC?.size ?? 0);
+  if (hits > 0) return true;
+  return (workflow.targets?.size ?? 0) > 0 ? false : null;
 }
 
 // ── Attack roll manipulation ──────────────────────────────────────────────────
 
+/**
+ * Midi's checkHits() reads the natural-20 / natural-1 result from the workflow
+ * (isCritical / isFumble), not from the roll, so keep both in step with the d20.
+ */
+function syncD20Flags(workflow, roll) {
+  const d20Result = getKeptD20Result(roll);
+  if (d20Result === undefined) return;
+  workflow.isCritical = d20Result === 20;
+  workflow.isFumble   = d20Result === 1;
+}
+
+/**
+ * Replace the workflow's attack roll, have Midi re-judge it, and redraw it.
+ * setAttackRoll tags the roll as the attack roll and links it to the card, which
+ * is how Midi 14.6 finds it to render; checkHits() then recomputes hitTargets
+ * with Midi's own rules. Reactions are suppressed for the recompute — they were
+ * already offered on the original roll, and re-running would prompt targets twice.
+ * displayAttackRoll() redraws the card straight away (keeping Midi's GM-only
+ * attack roll setting), so the new total shows while the player is still deciding.
+ */
 async function setAttackRoll(workflow, roll) {
-  if (typeof workflow.setAttackRoll === "function") {
-    await workflow.setAttackRoll(roll);
-  } else {
-    workflow.attackRoll  = roll;
-    workflow.attackTotal = roll.total;
-  }
+  await workflow.setAttackRoll(roll);
+  const options = workflow.workflowOptions ??= {};
+  const prevNoProvoke = options.noProvokeReaction;
+  options.noProvokeReaction = true;
   try {
-    workflow.attackRollHTML = await roll.render();
-    debug(`setAttackRoll: rendered attackRollHTML total=${roll.total}`);
-  } catch (e) {
-    debug(`setAttackRoll: roll.render() failed (${e.message})`);
+    await workflow.checkHits();
+  } finally {
+    if (prevNoProvoke === undefined) delete options.noProvokeReaction;
+    else options.noProvokeReaction = prevNoProvoke;
   }
+  const GMOnlyAttackRoll = !!workflow.chatCard?.getFlag?.("midi-qol", "GMOnlyAttackRoll");
+  await workflow.displayAttackRoll?.({ GMOnlyAttackRoll });
+  debug(`setAttackRoll: total=${roll.total} hits=${workflow.hitTargets?.size ?? 0}`);
 }
 
 /**
@@ -83,171 +101,243 @@ async function buildCombinedRoll(baseRoll, bonusRoll) {
   }
 }
 
-async function rerollAttack(workflow) {
-  debug(`rerollAttack: formula="${workflow.attackRoll.formula}" old total=${workflow.attackRoll.total}`);
-  const newRoll = await evaluateReroll(workflow.attackRoll);
-  await setAttackRoll(workflow, newRoll);
-  // Sync workflow.isCritical from the new d20 result.
-  const d20Result = getKeptD20Result(newRoll);
-  if (d20Result === 20) workflow.isCritical = true;
-  else if (d20Result !== undefined) workflow.isCritical = false;
-  console.log(`[${MODULE_ID}] rerollAttack: new total=${newRoll.total} d20=${d20Result} isCritical=${workflow.isCritical}`);
-  return newRoll;
+/** The workflow's current attack total. */
+function attackTotalOf(workflow) {
+  return Number(workflow.attackTotal ?? workflow.attackRoll?.total ?? 0);
 }
 
-async function rerollInspirationAttack(workflow) {
-  debug(`rerollInspirationAttack: formula="${workflow.attackRoll.formula}" old total=${workflow.attackRoll.total}`);
-  const newRoll = await evaluateInspirationReroll(workflow.attackRoll);
+/** Reroll the attack d20 with the given evaluator (luck dice or inspiration). */
+async function rerollAttack(workflow, evaluate, label) {
+  const before = attackTotalOf(workflow);
+  debug(`rerollAttack: formula="${workflow.attackRoll.formula}" old total=${before}`);
+  const newRoll = await evaluate(workflow.attackRoll);
+  syncD20Flags(workflow, newRoll);
   await setAttackRoll(workflow, newRoll);
-  const d20Result = getKeptD20Result(newRoll);
-  if (d20Result === 20) workflow.isCritical = true;
-  else if (d20Result !== undefined) workflow.isCritical = false;
-  console.log(`[${MODULE_ID}] rerollInspirationAttack: new total=${newRoll.total} d20=${d20Result} isCritical=${workflow.isCritical}`);
+  await recordAttackLuck(workflow, before, { label, total: newRoll.total, detail: `d20: ${getKeptD20Result(newRoll) ?? "?"}` });
+  console.log(`[${MODULE_ID}] rerollAttack: new total=${newRoll.total} isCritical=${workflow.isCritical} isFumble=${workflow.isFumble}`);
   return newRoll;
 }
 
 async function addLuckDiceToAttack(workflow, diceCount) {
-  const bonusRoll  = await new Roll(`${diceCount}d6`).evaluate();
+  const bonusRoll = await new Roll(`${diceCount}d6`).evaluate();
   if (game.dice3d) await game.dice3d.showForRoll(bonusRoll, game.user, true, null, false);
-  const prevTotal  = Number(workflow.attackTotal ?? workflow.attackRoll?.total ?? 0);
-  const combined   = await buildCombinedRoll(workflow.attackRoll, bonusRoll);
+  const before   = attackTotalOf(workflow);
+  const combined = await buildCombinedRoll(workflow.attackRoll, bonusRoll);
   await setAttackRoll(workflow, combined);
   workflow.luckAttackBonus = (workflow.luckAttackBonus ?? 0) + bonusRoll.total;
-  console.log(`[${MODULE_ID}] addLuckDiceToAttack: ${diceCount}d6 = ${bonusRoll.total}, total ${prevTotal} → ${combined.total}`);
+  await recordAttackLuck(workflow, before, {
+    label:  `Added ${diceCount}d6 Luck Dice`,
+    total:  combined.total,
+    detail: `${diceFaces(bonusRoll).join(", ")} = +${bonusRoll.total}`
+  });
+  console.log(`[${MODULE_ID}] addLuckDiceToAttack: ${diceCount}d6 = ${bonusRoll.total}, total ${before} → ${combined.total}`);
   return bonusRoll;
 }
 
-/**
- * Append the new attack total to a running history stored as a message flag.
- * renderChatMessage rebuilds the full chain from this array on every re-render.
- */
-async function updateAttackCard(workflow, currentTotal, renderedRoll = "", sectionLabel = "LUCK DICE") {
-  const msgId = workflow.itemCardId ?? workflow.chatId ?? workflow.messageId ?? workflow.chatMessage?.id;
-  if (!msgId) { debug("updateAttackCard: no message ID on workflow"); return; }
-  const message = game.messages.get(msgId);
-  if (!message) { debug(`updateAttackCard: message "${msgId}" not found`); return; }
-
-  const finalTotal = workflow.attackRoll.total;
-  const existing   = message.getFlag?.(MODULE_ID, "attackReroll");
-  const history    = existing?.history ? [...existing.history] : [currentTotal];
-  if (history[history.length - 1] !== finalTotal) history.push(finalTotal);
-
-  const hitState = getDefiniteHitState(workflow);
-  const isHit    = hitState === true;
-  const isCrit   = isHit && workflow.isCritical === true;
-
-  debug(`updateAttackCard: history=[${history.join(" → ")}] isHit=${isHit} isCrit=${isCrit}`);
-  try {
-    const updates = { [`flags.${MODULE_ID}.attackReroll`]: { history, isHit, isCrit } };
-    if (renderedRoll) {
-      // Parse the card DOM and insert or append to the labelled section.
-      const tempDiv = document.createElement("div");
-      tempDiv.innerHTML = message.content ?? "";
-
-      // Derive a stable CSS class from the section label so repeated calls
-      // (e.g. two "Add Dice" actions) append to the same section rather than
-      // creating a duplicate header.
-      const sectionClass = `lda-section-${sectionLabel.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
-      const existingSection = tempDiv.querySelector(`.${sectionClass}`);
-
-      if (existingSection) {
-        // Append the new roll beneath the existing header.
-        existingSection.insertAdjacentHTML("beforeend", renderedRoll);
-      } else {
-        // First roll for this label — create the section with its header.
-        const luckSection = document.createElement("div");
-        luckSection.className = sectionClass;
-        luckSection.innerHTML =
-          `<p style="text-align:center;font-size:10px;font-weight:bold;letter-spacing:0.15em;` +
-          `text-transform:uppercase;opacity:0.6;margin:6px 0 2px">${sectionLabel}</p>` +
-          renderedRoll;
-
-        // Insert before Midi-QoL's hit-display / damage sections so the luck
-        // dice sit below the full attack roll block (including tooltip) but
-        // above the target rows and damage.
-        const midiAnchor = tempDiv.querySelector(
-          ".midi-qol-hits-display, .midi-qol-damage-roll, " +
-          ".midi-qol-target-list, .end-midi-qol-attack-roll"
-        );
-        if (midiAnchor) {
-          midiAnchor.insertAdjacentElement("beforebegin", luckSection);
-        } else {
-          // Fallback: after the first .dice-roll (attack section).
-          const attackSection = tempDiv.querySelector(".dice-roll");
-          if (attackSection) attackSection.insertAdjacentElement("afterend", luckSection);
-          else tempDiv.appendChild(luckSection);
-        }
-      }
-      updates.content = tempDiv.innerHTML;
-    }
-    await message.update(updates);
-  } catch (e) {
-    console.warn(`[${MODULE_ID}] updateAttackCard error:`, e);
+/** Record a miss converted to a hit, so the damage prompt treats it as a hit. */
+function markIfConverted(workflow, state) {
+  if (getDefiniteHitState(workflow) === true) {
+    state.convertedMissToHit = true;
+    debug("attack: luck converted miss to hit");
   }
 }
 
-/** Recompute workflow.hitTargets from the current workflow.attackTotal vs each target's AC. */
-function recomputeHitTargets(workflow) {
-  const targets = workflow.targets instanceof Set ? [...workflow.targets] : [];
-  const total   = Number(workflow.attackTotal ?? workflow.attackRoll?.total);
-  if (!Number.isFinite(total)) return;
-  workflow.hitTargets = new Set(
-    targets.filter((t) => {
-      const ac = Number(t?.actor?.system?.attributes?.ac?.value);
-      return Number.isFinite(ac) && total >= ac;
-    })
-  );
-  debug(`recomputeHitTargets: total=${total} hits=${workflow.hitTargets.size}/${targets.length}`);
+// ── Luck Dice history on Midi's card ──────────────────────────────────────────
+// Midi 14.6 renders its usage card from data and owns a fixed set of sections,
+// so the history is kept in this module's flags on Midi's card and injected on
+// every render — attack history under the attack roll, save history under the
+// saves. Each flag update re-renders the card for all viewers, so the player
+// sees each reroll as it happens.
+//
+// Attack history (HISTORY_FLAG):
+//   { start, entries: [{ kind: "attack"|"damage", label, total?, detail? }], verdict? }
+// Save history (SAVES_FLAG) — an array, since target uuids contain dots that a
+// flag object would expand into nested keys:
+//   [{ uuid, name, start, entries: [{ kind: "save", label, total, detail }], verdict? }]
+// Entries without a total (luck damage) render as a plain line.
+
+const HISTORY_FLAG = "luckHistory";
+const SAVES_FLAG   = "luckSaves";
+const VERDICTS     = { hit: ["HIT", true], miss: ["MISS", false], passed: ["PASSED", true], failed: ["FAILED", false] };
+
+/** Active die faces of a roll, e.g. [4, 3] for 2d6. */
+function diceFaces(roll) {
+  return (roll?.dice ?? []).flatMap(d => (d.results ?? []).filter(r => r.active !== false).map(r => r.result));
+}
+
+/** Read-modify-write one of this module's flags on the workflow's card. */
+async function updateCardFlag(workflow, key, fallback, mutate) {
+  const card = workflow?.chatCard;
+  if (!card) { debug(`updateCardFlag(${key}): workflow has no chat card`); return; }
+  const value = foundry.utils.deepClone(card.getFlag(MODULE_ID, key) ?? fallback);
+  mutate(value);
+  try {
+    await card.setFlag(MODULE_ID, key, value);
+  } catch (err) {
+    console.warn(`[${MODULE_ID}] updateCardFlag(${key}): could not update card ${card.id}:`, err);
+  }
+}
+
+function updateLuckHistory(workflow, mutate) {
+  return updateCardFlag(workflow, HISTORY_FLAG, { start: null, entries: [] }, mutate);
+}
+
+/** Add one attack reroll / add-dice step; `before` is the total it replaced. */
+function recordAttackLuck(workflow, before, entry) {
+  return updateLuckHistory(workflow, (h) => {
+    h.start ??= before;
+    h.entries.push({ kind: "attack", ...entry });
+    delete h.verdict;
+  });
+}
+
+/** Stamp the final HIT / MISS once the player is done spending on the attack. */
+async function finishLuckHistory(workflow) {
+  const history = workflow?.chatCard?.getFlag(MODULE_ID, HISTORY_FLAG);
+  if (!history?.entries?.some(e => e.kind === "attack")) return;
+  const hit = getDefiniteHitState(workflow) === true;
+  await updateLuckHistory(workflow, (h) => { h.verdict = hit ? "hit" : "miss"; });
+}
+
+/** Add one save reroll / add-dice step for a target. target: { uuid, name, start }. */
+function recordSaveLuck(workflow, target, entry) {
+  return updateCardFlag(workflow, SAVES_FLAG, [], (saves) => {
+    let record = saves.find(s => s.uuid === target.uuid);
+    if (!record) saves.push(record = { uuid: target.uuid, name: target.name, start: target.start, entries: [] });
+    record.entries.push({ kind: "save", ...entry });
+    delete record.verdict;
+  });
+}
+
+/** Stamp PASSED / FAILED on a target's save history, if luck was spent on it. */
+async function finishSaveLuck(workflow, uuid, passed) {
+  const saves = workflow?.chatCard?.getFlag(MODULE_ID, SAVES_FLAG);
+  if (!saves?.some(s => s.uuid === uuid)) return;
+  await updateCardFlag(workflow, SAVES_FLAG, [], (list) => {
+    const record = list.find(s => s.uuid === uuid);
+    if (record) record.verdict = passed ? "passed" : "failed";
+  });
+}
+
+/** Rows for one history: superseded totals struck through, the current one bold. */
+function renderHistoryRows(history) {
+  const hasTotal = (e) => e.total !== undefined && e.total !== null;
+  const current  = history.entries.filter(hasTotal).at(-1);
+  const row = (label, value = "", { struck = false, strong = false } = {}) => `
+    <div style="display:flex;justify-content:space-between;align-items:baseline;gap:6px;margin:1px 0">
+      <span>${label}</span>
+      <span style="${struck ? "text-decoration:line-through;opacity:0.5;" : ""}${strong ? "font-weight:bold;font-size:1.15em;" : ""}">${value}</span>
+    </div>`;
+
+  const rows = [];
+  if (current && history.start !== null && history.start !== undefined) {
+    rows.push(row("Original roll", history.start, { struck: true }));
+  }
+  for (const e of history.entries) {
+    if (!hasTotal(e)) { rows.push(row(e.label)); continue; }
+    const detail = e.detail ? ` <span style="opacity:0.6;font-size:0.85em">(${e.detail})</span>` : "";
+    rows.push(row(`${e.label}${detail}`, e.total, { struck: e !== current, strong: e === current }));
+  }
+  const [verdict, good] = VERDICTS[history.verdict] ?? [];
+  if (verdict) rows.push(`<div style="text-align:right;font-weight:bold;color:${good ? "#719f50" : "#c0392b"}">${verdict}</div>`);
+  return rows.join("");
+}
+
+/** The bordered "Luck Dice" block, as a detached element. */
+function luckBlock(className, inner) {
+  const wrapper = document.createElement("div");
+  wrapper.innerHTML = `
+    <div class="${className}" style="margin:4px 0;padding:4px 6px;border:1px solid rgba(128,128,128,0.4);border-radius:4px">
+      <p style="text-align:center;font-size:10px;font-weight:bold;letter-spacing:0.15em;text-transform:uppercase;opacity:0.6;margin:0 0 2px">Luck Dice</p>
+      ${inner}
+    </div>`.trim();
+  return wrapper.firstElementChild;
+}
+
+/**
+ * Insert the history blocks into a rendered Midi card. Anchors on Midi's section
+ * wrappers (`midi-qol-hits-display`, `midi-qol-attack-roll`,
+ * `midi-qol-saves-display`), which Midi keeps for third-party code. Idempotent —
+ * safe to run from more than one render hook.
+ */
+function injectLuckHistory(message, html) {
+  if (!(html instanceof HTMLElement)) return;
+  html.querySelectorAll(".lda-luck-history, .lda-luck-saves").forEach(el => el.remove());
+  const fallback = () => html.querySelector(".midi-results") ?? html;
+
+  // Attack history, directly under the attack roll. Hidden from players when
+  // Midi shows the attack roll to the GM only, so it never reveals that roll.
+  const history = message.getFlag?.(MODULE_ID, HISTORY_FLAG);
+  if (history?.entries?.length && (game.user.isGM || !message.getFlag?.("midi-qol", "GMOnlyAttackRoll"))) {
+    const block  = luckBlock("lda-luck-history", renderHistoryRows(history));
+    const hits   = html.querySelector(".midi-qol-hits-display");
+    const attack = html.querySelector(".midi-qol-attack-roll");
+    if (hits) hits.before(block);
+    else if (attack) attack.after(block);
+    else fallback().append(block);
+  }
+
+  // Save history, one titled history per target, directly under Midi's saves.
+  const saves = (message.getFlag?.(MODULE_ID, SAVES_FLAG) ?? []).filter(s => s.entries?.length);
+  if (saves.length) {
+    const escape = foundry.utils.escapeHTML ?? ((s) => String(s));
+    const block  = luckBlock("lda-luck-saves", saves.map(s => `
+      <div style="font-weight:bold;margin-top:2px">${escape(s.name ?? "")}</div>
+      ${renderHistoryRows(s)}`).join(""));
+    const savesSection = html.querySelector(".midi-qol-saves-display");
+    if (savesSection) savesSection.after(block);
+    else fallback().append(block);
+  }
 }
 
 // ── Damage injection ──────────────────────────────────────────────────────────
 
-function injectLuckDamage(workflow, diceCount, isCrit) {
-  const formula     = buildLuckDamageFormula(diceCount, isCrit);
-  const baseFormula = `${diceCount}d6`;
-
-  if (typeof workflow.damageRollFormula === "string" && workflow.damageRollFormula) {
-    workflow.damageRollFormula = `(${workflow.damageRollFormula}) + ${formula}`;
-    console.log(`[${MODULE_ID}] injectLuckDamage via damageRollFormula: ${workflow.damageRollFormula}`);
-    return;
+/** True when a dnd5e damage roll config belongs to this workflow's activity. */
+function isWorkflowDamageRoll(config, workflow) {
+  const subject = config?.subject;
+  if (subject && workflow.activity) {
+    return subject === workflow.activity || (!!subject.uuid && subject.uuid === workflow.activity.uuid);
   }
-  if (typeof workflow.damageFormula === "string" && workflow.damageFormula) {
-    workflow.damageFormula = `(${workflow.damageFormula}) + ${formula}`;
-    console.log(`[${MODULE_ID}] injectLuckDamage via damageFormula: ${workflow.damageFormula}`);
-    return;
-  }
-  Hooks.once("dnd5e.preRollDamageV2", (rollConfig) => {
-    const parts = Array.isArray(rollConfig?.parts) ? rollConfig.parts
-      : Array.isArray(rollConfig?.rolls?.[0]?.parts) ? rollConfig.rolls[0].parts
-      : null;
-    if (parts) {
-      parts.push(baseFormula);
-      console.log(`[${MODULE_ID}] injectLuckDamage via preRollDamageV2: pushed "${baseFormula}" onto parts`);
-    } else {
-      console.warn(`[${MODULE_ID}] injectLuckDamage: preRollDamageV2 parts not found — config keys:`, Object.keys(rollConfig ?? {}));
-    }
-  });
-  console.log(`[${MODULE_ID}] injectLuckDamage: registered preRollDamageV2 hook for "${baseFormula}" (isCrit=${isCrit})`);
+  return config?.workflow === workflow;
 }
 
-function getPrimaryDamageType(workflow) {
-  const item = workflow?.item;
-  if (!item) return null;
-  const types5x = item.system?.damage?.base?.types;
-  if (types5x instanceof Set && types5x.size > 0) return [...types5x][0];
-  const parts = item.system?.damage?.parts;
-  if (Array.isArray(parts) && parts.length > 0 && parts[0]?.[1]) return parts[0][1];
-  return null;
+/**
+ * Add luck dice to this workflow's damage roll. Midi rolls damage through
+ * dnd5e's activity.rollDamage, which fires dnd5e.preRollDamageV2 with the
+ * activity as config.subject — so the listener only touches this activity's
+ * roll (not other-activity or unrelated damage), then removes itself.
+ * The plain Nd6 is pushed and dnd5e scales it for a critical itself.
+ */
+function injectLuckDamage(workflow, diceCount) {
+  const formula = `${diceCount}d6`;
+  let hookId = null;
+  const removeHook = () => {
+    if (hookId === null) return;
+    Hooks.off("dnd5e.preRollDamageV2", hookId);
+    hookId = null;
+  };
+
+  hookId = Hooks.on("dnd5e.preRollDamageV2", (config) => {
+    if (!isWorkflowDamageRoll(config, workflow)) return;
+    const parts = Array.isArray(config?.rolls?.[0]?.parts) ? config.rolls[0].parts
+      : Array.isArray(config?.parts) ? config.parts
+      : null;
+    if (parts) {
+      parts.push(formula);
+      console.log(`[${MODULE_ID}] injectLuckDamage: pushed "${formula}" onto damage parts`);
+    } else {
+      console.warn(`[${MODULE_ID}] injectLuckDamage: damage parts not found — config keys:`, Object.keys(config ?? {}));
+    }
+    removeHook();
+  });
+
+  // Never leave the listener behind if this workflow's damage is never rolled.
+  setTimeout(removeHook, 120_000);
+  debug(`injectLuckDamage: waiting for ${workflow.activity?.name ?? "activity"} damage roll to add "${formula}"`);
 }
 
 function isCritDiceMaximized() {
   try { return !!game.settings.get("dnd5e", "criticalDamageMaxDice"); } catch { return false; }
-}
-
-function buildLuckDamageFormula(diceCount, isCrit) {
-  if (!isCrit) return `${diceCount}d6`;
-  if (isCritDiceMaximized()) return `${diceCount}d6 + ${diceCount * 6}`;
-  return `${diceCount * 2}d6`;
 }
 
 // ── Attack prompts ────────────────────────────────────────────────────────────
@@ -261,87 +351,71 @@ async function promptLuckOnMiss(workflow) {
 
   let diceAdded = false; // once true, reroll option is hidden
 
-  while (true) {
-    const hitState = getDefiniteHitState(workflow);
-    console.log(`[${MODULE_ID}] promptLuckOnMiss loop: hitState=${hitState} total=${workflow.attackTotal ?? workflow.attackRoll?.total} hits=${workflow.hitTargets?.size ?? 0}`);
-    if (hitState !== false) return;
+  try {
+    while (true) {
+      const hitState = getDefiniteHitState(workflow);
+      console.log(`[${MODULE_ID}] promptLuckOnMiss loop: hitState=${hitState} total=${workflow.attackTotal ?? workflow.attackRoll?.total} hits=${workflow.hitTargets?.size ?? 0}`);
+      if (hitState !== false) return;
 
-    const luckEnabled  = isLuckDiceEnabled();
-    const luckAvail    = luckEnabled ? getDiceUses(actor, LUCK_DICE_ITEM_NAME)   : 0;
-    const impactAvail  = luckEnabled ? getDiceUses(actor, IMPACT_DICE_ITEM_NAME) : 0;
-    const totalAvail   = luckAvail + impactAvail;
-    const hasInsp      = isInspirationEnabled() && actorHasInspiration(actor);
+      const luckEnabled = isLuckDiceEnabled();
+      const luckAvail   = luckEnabled ? getDiceUses(actor, LUCK_DICE_ITEM_NAME)   : 0;
+      const impactAvail = luckEnabled ? getDiceUses(actor, IMPACT_DICE_ITEM_NAME) : 0;
+      const totalAvail  = luckAvail + impactAvail;
+      const hasInsp     = isInspirationEnabled() && actorHasInspiration(actor);
 
-    if (totalAvail <= 0 && !hasInsp) { debug("promptLuckOnMiss: no dice or inspiration available, exiting"); return; }
+      if (totalAvail <= 0 && !hasInsp) { debug("promptLuckOnMiss: no dice or inspiration available, exiting"); return; }
 
-    console.log(`[${MODULE_ID}] promptLuckOnMiss: luck=${luckAvail} impact=${impactAvail} total=${totalAvail} inspiration=${hasInsp} diceAdded=${diceAdded}`);
-    state.attackPrompted = true;
+      console.log(`[${MODULE_ID}] promptLuckOnMiss: luck=${luckAvail} impact=${impactAvail} total=${totalAvail} inspiration=${hasInsp} diceAdded=${diceAdded}`);
+      state.attackPrompted = true;
 
-    const options = [];
-    if (hasInsp)                         options.push({ action: "inspiration", label: "Use Inspiration (Reroll)" });
-    if (totalAvail >= 2 && !diceAdded)   options.push({ action: "reroll",      label: "Spend 2 Dice to Reroll" });
-    if (totalAvail > 0)                  options.push({ action: "add",         label: `Add Dice (1–${totalAvail}d6)` });
-    options.push({ action: "decline", label: "Keep Miss" });
+      const options = [];
+      if (hasInsp)                       options.push({ action: "inspiration", label: "Use Inspiration (Reroll)" });
+      if (totalAvail >= 2 && !diceAdded) options.push({ action: "reroll",      label: "Spend 2 Dice to Reroll" });
+      if (totalAvail > 0)                options.push({ action: "add",         label: `Add Dice (1–${totalAvail}d6)` });
+      options.push({ action: "decline", label: "Keep Miss" });
 
-    const action = await promptChoice(
-      "Missed Attack",
-      `<p>Your attack missed. What would you like to do?</p>${luckEnabled ? buildDiceAvailableHTML(actor) : ""}`,
-      options
-    );
-    console.log(`[${MODULE_ID}] promptLuckOnMiss: player chose "${action}"`);
-    if (action === "decline" || !action) return;
+      const action = await promptChoice(
+        "Missed Attack",
+        `<p>Your attack missed with a <strong>${attackTotalOf(workflow)}</strong>. What would you like to do?</p>${luckEnabled ? buildDiceAvailableHTML(actor) : ""}`,
+        options
+      );
+      console.log(`[${MODULE_ID}] promptLuckOnMiss: player chose "${action}"`);
+      if (action === "decline" || !action) return;
 
-    if (action === "inspiration") {
-      await consumeInspiration(actor);
-      const oldTotal = Number(workflow.attackTotal ?? workflow.attackRoll?.total ?? 0);
-      const newRoll  = await rerollInspirationAttack(workflow);
-      await updateAttackCard(workflow, oldTotal, await newRoll.render(), "INSPIRATION");
-      if (getDefiniteHitState(workflow) === true) {
-        state.convertedMissToHit = true;
-        recomputeHitTargets(workflow);
-        debug("promptLuckOnMiss: inspiration reroll converted miss to hit");
+      if (action === "inspiration") {
+        await consumeInspiration(actor);
+        await rerollAttack(workflow, evaluateInspirationReroll, "Rerolled with Inspiration");
+        markIfConverted(workflow, state);
+        // Inspiration and Luck Dice are mutually exclusive — stop here regardless of hit state.
+        return;
       }
-      // Inspiration and Luck Dice are mutually exclusive — stop here regardless of hit state.
-      return;
-    }
 
-    if (action === "reroll" && totalAvail >= 2) {
-      const spent = await spendDiceFromPools(actor, 2);
-      if (spent < 2) { debug("promptLuckOnMiss: could not spend 2 dice for reroll"); return; }
-      state.luckSpentOnAttack += 2;
-      const oldTotalReroll = Number(workflow.attackTotal ?? workflow.attackRoll?.total ?? 0);
-      const newRoll        = await rerollAttack(workflow);
-      await updateAttackCard(workflow, oldTotalReroll, await newRoll.render());
-      if (getDefiniteHitState(workflow) === true) {
-        state.convertedMissToHit = true;
-        recomputeHitTargets(workflow);
-        debug("promptLuckOnMiss: reroll converted miss to hit");
+      if (action === "reroll" && totalAvail >= 2) {
+        const spent = await spendDiceFromPools(actor, 2);
+        if (spent < 2) { debug("promptLuckOnMiss: could not spend 2 dice for reroll"); return; }
+        state.luckSpentOnAttack += 2;
+        await rerollAttack(workflow, evaluateReroll, "Rerolled with 2 Luck Dice");
+        markIfConverted(workflow, state);
       }
-    }
 
-    if (action === "add") {
-      const curLuck   = getDiceUses(actor, LUCK_DICE_ITEM_NAME);
-      const curImpact = getDiceUses(actor, IMPACT_DICE_ITEM_NAME);
-      const curMax    = curLuck + curImpact;
-      if (curMax <= 0) return;
+      if (action === "add") {
+        const curMax = getDiceUses(actor, LUCK_DICE_ITEM_NAME) + getDiceUses(actor, IMPACT_DICE_ITEM_NAME);
+        if (curMax <= 0) return;
 
-      const raw = await promptSlider("Add Dice to Attack", buildDiceAvailableHTML(actor), "luckDiceCount", 1, curMax, 1);
-      const diceCount = clamp(Number(raw ?? 0), 1, curMax);
-      if (!Number.isFinite(diceCount) || diceCount < 1) { debug("promptLuckOnMiss: invalid diceCount"); return; }
+        const raw = await promptSlider("Add Dice to Attack", buildDiceAvailableHTML(actor), "luckDiceCount", 1, curMax, 1);
+        const diceCount = clamp(Number(raw ?? 0), 1, curMax);
+        if (!Number.isFinite(diceCount) || diceCount < 1) { debug("promptLuckOnMiss: invalid diceCount"); return; }
 
-      const spent = await spendDiceFromPools(actor, diceCount);
-      if (spent < 1) { debug("promptLuckOnMiss: could not spend dice for add"); return; }
-      diceAdded = true;
-      state.luckSpentOnAttack += diceCount;
-      const oldTotalAdd = Number(workflow.attackTotal ?? workflow.attackRoll?.total ?? 0);
-      const bonusRoll   = await addLuckDiceToAttack(workflow, diceCount);
-      await updateAttackCard(workflow, oldTotalAdd, await bonusRoll.render());
-      if (getDefiniteHitState(workflow) === true) {
-        state.convertedMissToHit = true;
-        recomputeHitTargets(workflow);
-        debug("promptLuckOnMiss: add-dice converted miss to hit");
+        const spent = await spendDiceFromPools(actor, diceCount);
+        if (spent < 1) { debug("promptLuckOnMiss: could not spend dice for add"); return; }
+        diceAdded = true;
+        state.luckSpentOnAttack += diceCount;
+        await addLuckDiceToAttack(workflow, diceCount);
+        markIfConverted(workflow, state);
       }
     }
+  } finally {
+    await finishLuckHistory(workflow);
   }
 }
 
@@ -352,7 +426,7 @@ async function promptLuckOnDamage(workflow) {
   const state = getState(workflow);
   if (state.damagePrompted) return;
 
-  const hitState    = getDefiniteHitState(workflow);
+  const hitState     = getDefiniteHitState(workflow);
   const effectiveHit = hitState === true || state.convertedMissToHit === true;
   const isCrit       = workflow.isCritical === true;
   const maximizeCrit = isCrit && isCritDiceMaximized();
@@ -365,9 +439,7 @@ async function promptLuckOnDamage(workflow) {
     `isCrit=${isCrit}`,
     `maximizeCrit=${maximizeCrit}`,
     `hitTargets=${workflow.hitTargets?.size ?? "n/a"}`,
-    `attackTotal=${workflow.attackTotal ?? workflow.attackRoll?.total ?? "n/a"}`,
-    `damageRollFormula="${workflow.damageRollFormula ?? "n/a"}"`,
-    `damageFormula="${workflow.damageFormula ?? "n/a"}"`
+    `attackTotal=${workflow.attackTotal ?? workflow.attackRoll?.total ?? "n/a"}`
   );
 
   if (!effectiveHit) { debug("promptLuckOnDamage: not a hit — skipping damage prompt"); return; }
@@ -400,19 +472,22 @@ async function promptLuckOnDamage(workflow) {
   if (spent < 1) { debug("promptLuckOnDamage: could not spend dice"); return; }
 
   console.log(`[${MODULE_ID}] promptLuckOnDamage: injecting ${diceCount}d6 isCrit=${isCrit} maximizeCrit=${maximizeCrit}`);
-  injectLuckDamage(workflow, diceCount, isCrit);
+  injectLuckDamage(workflow, diceCount);
+  await updateLuckHistory(workflow, (h) => {
+    h.entries.push({ kind: "damage", label: `+${diceCount}d6 Luck Dice to damage${isCrit ? " (critical)" : ""}` });
+  });
 }
 
 async function promptNatOne(workflow) {
   const actor = workflow?.actor;
   if (!actor || (!game.user?.isGM && actor.hasPlayerOwner && !actor.isOwner)) return;
 
-  const state        = getState(workflow);
-  const luckEnabled  = isLuckDiceEnabled();
-  const luckAvail    = luckEnabled ? getDiceUses(actor, LUCK_DICE_ITEM_NAME)   : 0;
-  const impactAvail  = luckEnabled ? getDiceUses(actor, IMPACT_DICE_ITEM_NAME) : 0;
-  const totalAvail   = luckAvail + impactAvail;
-  const hasInsp      = isInspirationEnabled() && actorHasInspiration(actor);
+  const state       = getState(workflow);
+  const luckEnabled = isLuckDiceEnabled();
+  const luckAvail   = luckEnabled ? getDiceUses(actor, LUCK_DICE_ITEM_NAME)   : 0;
+  const impactAvail = luckEnabled ? getDiceUses(actor, IMPACT_DICE_ITEM_NAME) : 0;
+  const totalAvail  = luckAvail + impactAvail;
+  const hasInsp     = isInspirationEnabled() && actorHasInspiration(actor);
 
   // No options at all — auto-regain if luck dice are enabled and the actor has them.
   if (totalAvail < 2 && !hasInsp) {
@@ -439,15 +514,10 @@ async function promptNatOne(workflow) {
 
   if (action === "inspiration") {
     await consumeInspiration(actor);
-    const oldTotal = Number(workflow.attackTotal ?? workflow.attackRoll?.total ?? 0);
-    const newRoll  = await rerollInspirationAttack(workflow);
-    await updateAttackCard(workflow, oldTotal, await newRoll.render(), "INSPIRATION");
-    if (getDefiniteHitState(workflow) === true) {
-      state.convertedMissToHit = true;
-      recomputeHitTargets(workflow);
-      debug("promptNatOne: inspiration reroll converted nat-1 to hit");
-    }
+    await rerollAttack(workflow, evaluateInspirationReroll, "Rerolled with Inspiration");
+    markIfConverted(workflow, state);
     // Inspiration and Luck Dice are mutually exclusive — stop here regardless of hit state.
+    await finishLuckHistory(workflow);
     return;
   }
 
@@ -455,16 +525,11 @@ async function promptNatOne(workflow) {
     const spent = await spendDiceFromPools(actor, 2);
     if (spent < 2) { debug("promptNatOne: could not spend 2 dice"); return; }
     state.luckSpentOnAttack += 2;
-    const oldTotal = Number(workflow.attackTotal ?? workflow.attackRoll?.total ?? 0);
-    const newRoll  = await rerollAttack(workflow);
-    await updateAttackCard(workflow, oldTotal, await newRoll.render());
-    if (getDefiniteHitState(workflow) === true) {
-      state.convertedMissToHit = true;
-      recomputeHitTargets(workflow);
-      debug("promptNatOne: reroll converted nat-1 miss to hit");
-    } else {
-      await promptLuckOnMiss(workflow);
-    }
+    await rerollAttack(workflow, evaluateReroll, "Rerolled with 2 Luck Dice");
+    markIfConverted(workflow, state);
+    // Still missing — continue in the miss prompt, which adds to the same history.
+    if (getDefiniteHitState(workflow) === false) return promptLuckOnMiss(workflow);
+    await finishLuckHistory(workflow);
     return;
   }
 
@@ -474,219 +539,53 @@ async function promptNatOne(workflow) {
   }
 }
 
-// ── Midi save-pass card indicator ────────────────────────────────────────────
-
-/**
- * Flip the Midi spell-card target row for `uuid` from × (failed) to ✓ (passed)
- * directly on the provided DOM `container`. Called from renderChatMessageHTML
- * so re-renders triggered by Midi don't revert the icon.
- *
- * @param {Element}      container  Root element to search within.
- * @param {string}       uuid       Token UUID to locate.
- * @param {number}       [newTotal] Luck-dice adjusted save total — updates the roll display.
- * @param {number}       [dc]       Save DC — updates the tooltip.
- */
-function applyLuckySavePassToDOM(container, uuid, newTotal, dc) {
-  if (!(container instanceof Element)) return;
-  const anchorEl = container.querySelector(`[data-uuid="${uuid}"]`);
-  if (!anchorEl) return;
-
-  // The UUID attribute is on a child div; climb to the <li> row that holds the icon.
-  const row = anchorEl.closest("li") ??
-              anchorEl.closest("[class*='midi-qol-flex-container']") ??
-              anchorEl.parentElement;
-  if (!row) return;
-
-  let flipped = false;
-  for (const icon of row.querySelectorAll("i, span[class*='fa-']")) {
-    if (icon.closest(".dice-result, .dice-tooltip")) continue;
-    const cls = icon.className ?? "";
-    if (!/fa-(times|xmark)|midi-qol-(miss|fail|save-fail|save-failure)/i.test(cls)) continue;
-    icon.classList.remove(
-      "fa-times", "fa-xmark", "midi-qol-miss", "midi-qol-fail",
-      "midi-qol-save-fail", "midi-qol-save-failure", "miss", "fail", "failure"
-    );
-    icon.classList.add("fa-check", "midi-qol-save-success", "success");
-    icon.style.color = "#719f50";
-    flipped = true;
-  }
-  row.classList.remove("failure", "miss", "fail", "midi-qol-miss", "midi-qol-save-failure");
-  row.classList.add("success", "midi-qol-save-success");
-
-  // Update the displayed save total so the card shows the luck-dice adjusted number.
-  if (newTotal !== undefined) {
-    // Midi renders the roll total in a span with a class that includes "save-total",
-    // or sometimes as a plain number span / anchor within the row.  Try several selectors.
-    const totalEl = row.querySelector(
-      ".midi-qol-save-total, [class*='save-total'], [class*='saveTotal'], " +
-      ".midi-qol-roll-total, [class*='roll-total']"
-    );
-    if (totalEl) {
-      totalEl.textContent = String(newTotal);
-      if (dc !== undefined) {
-        totalEl.setAttribute("data-tooltip", `${newTotal} vs DC ${dc} (luck dice)`);
-        totalEl.setAttribute("title", `${newTotal} vs DC ${dc} (luck dice)`);
-      }
-      debug(`applyLuckySavePassToDOM: updated save total display to ${newTotal}`);
-    } else {
-      // Log child class names so we can find the right selector on the next pass.
-      const childClasses = [...row.querySelectorAll("*")].map(el => el.className).filter(Boolean);
-      console.log(`[${MODULE_ID}] applyLuckySavePassToDOM: save total span not found for uuid=${uuid} — row child classes:`, childClasses);
-    }
-  }
-
-  debug(`applyLuckySavePassToDOM: flipped=${flipped} uuid=${uuid} newTotal=${newTotal ?? "n/a"}`);
-}
-
-// ── Chat card history rendering ───────────────────────────────────────────────
-
-/**
- * Mutate `container` to display the reroll history stored in `reroll`.
- * Returns true if the anchor element was found and the history was applied.
- */
-function applyHistoryToDOM(container, reroll) {
-  const { history, isHit } = reroll;
-  if (!history?.length || history.length < 2) return false;
-  if (!(container instanceof Element)) return false;
-
-  for (const el of container.querySelectorAll("h4.dice-total, .dice-total")) {
-    if (Number(el.textContent.trim()) !== history[0]) continue;
-
-    el.style.cssText += ";text-decoration:line-through;opacity:0.4;font-size:0.8em;margin-bottom:2px";
-
-    let anchor = el;
-    for (let i = 1; i < history.length; i++) {
-      const isLast = i === history.length - 1;
-      const newEl  = document.createElement(el.tagName.toLowerCase());
-
-      if (!isLast) {
-        newEl.className   = el.className;
-        newEl.textContent = String(history[i]);
-        newEl.style.cssText = "text-decoration:line-through;opacity:0.4;font-size:0.8em;margin-bottom:2px";
-      } else if (isHit) {
-        newEl.className        = "dice-total success";
-        newEl.style.color      = "#719f50";
-        newEl.style.borderColor = "#719f50";
-        newEl.appendChild(document.createTextNode(String(history[i])));
-        const iconsDiv = document.createElement("div");
-        iconsDiv.className = "icons";
-        const icon = document.createElement("i");
-        icon.className = "fas fa-check";
-        icon.setAttribute("inert", "");
-        iconsDiv.appendChild(icon);
-        newEl.appendChild(iconsDiv);
-      } else {
-        newEl.className   = el.className;
-        newEl.textContent = String(history[i]);
-      }
-
-      anchor.parentNode.insertBefore(newEl, anchor.nextSibling);
-      anchor = newEl;
-    }
-
-    debug(`applyHistoryToDOM (numeric): history=[${history.join("→")}] isHit=${isHit ?? false}`);
-    return true;
-  }
-
-  // Text-label mode fallback (Midi configured to show "misses"/"hits" instead of totals).
-  if (isHit === true) {
-    for (const el of container.querySelectorAll("h4.dice-total, .dice-total")) {
-      const text = el.textContent.trim().toLowerCase();
-      if (text === "" || !isNaN(Number(text))) continue;
-      if (!/miss|fumble|fail/.test(text)) continue;
-      el.className        = "dice-total success";
-      el.style.color      = "#719f50";
-      el.style.borderColor = "#719f50";
-      el.textContent      = "hits";
-      debug(`applyHistoryToDOM (text-label): "${text}" → "hits"`);
-      return true;
-    }
-  }
-
-  return false;
-}
-
-// ── Midi hit-indicator update ─────────────────────────────────────────────────
-
-/**
- * Flip Midi-QoL's target hit-check row from miss (×) to hit (✓) inside `container`.
- * DOM structure (from inspection):
- *   <li class="target failure midi-qol midi-qol-hit-class midi-qol-target-select">
- *     <i class="midi-qol-hit-symbol fas fa-[times|xmark] midi-qol-miss miss">
- */
-function updateMidiHitIndicators(container) {
-  if (!(container instanceof Element)) return;
-  let updated = false;
-
-  // Primary: use Midi's own hit-symbol class to find miss icons precisely.
-  for (const icon of container.querySelectorAll(
-    "i.midi-qol-hit-symbol.midi-qol-miss, " +
-    "i.midi-qol-hit-symbol.fa-times, " +
-    "i.midi-qol-hit-symbol.fa-xmark"
-  )) {
-    icon.classList.remove("fa-times", "fa-xmark", "midi-qol-miss", "miss");
-    icon.classList.add("fa-check", "midi-qol-hit", "hit");
-    icon.style.color = "#719f50";
-    const row = icon.closest("li");
-    if (row) {
-      row.classList.remove("failure", "miss", "midi-qol-miss", "midi-qol-missed");
-      row.classList.add("hit", "midi-qol-hit");
-    }
-    updated = true;
-  }
-
-  // Fallback: any fa-times/fa-xmark outside the dice-result section.
-  if (!updated) {
-    for (const icon of container.querySelectorAll("i.fas.fa-times, i.fas.fa-xmark, i.fa-times, i.fa-xmark")) {
-      if (icon.closest(".dice-result")) continue;
-      icon.classList.remove("fa-times", "fa-xmark");
-      icon.classList.add("fa-check");
-      icon.style.color = "#719f50";
-      const row = icon.parentElement?.closest("li, .midi-qol-target-result, [class*='target']");
-      if (row) {
-        row.classList.remove("failure", "miss", "midi-qol-miss", "midi-qol-missed");
-        row.classList.add("hit", "midi-qol-hit");
-      }
-      updated = true;
-    }
-  }
-
-  debug(`updateMidiHitIndicators: updated=${updated}`);
-}
-
 // ── Midi save failure prompt ──────────────────────────────────────────────────
 
 /**
  * Show the luck dice / inspiration prompt on the current client and return the
- * result. Called directly when this client owns the actor.
+ * result. Called directly when this client owns the actor (with the real save
+ * roll), or via the midiSaveFailed socket on a player's client (rebuilt from
+ * its formula).
+ *
+ * reporter: optional async (entry) => void that receives each reroll / add-dice
+ * step, for display on Midi's card. Without one (concentration), the prompts
+ * post their own roll card instead.
  *
  * Cross-file calls to promptNatOneSave (saving-throw.js) and promptLuckOnCheckFail
  * (skill-check.js) go through LDA because those scripts load after attack.js.
  */
-async function runMidiSavePrompt(actor, rollTotal, dc, formula, d20Result, rollMsgId, rollMsgContent) {
-  const fakeRoll = buildFakeRoll(rollTotal, formula, d20Result);
+async function runMidiSavePrompt(actor, rollTotal, dc, formula, d20Result, rollMsgId, rollMsgContent, saveRoll = null, reporter = null) {
+  const roll = saveRoll ?? buildFakeRoll(rollTotal, formula, d20Result);
   if (d20Result === 1) {
-    return LDA.promptNatOneSave(actor, rollTotal, dc, fakeRoll, rollMsgId, rollMsgContent);
+    return LDA.promptNatOneSave(actor, rollTotal, dc, roll, rollMsgId, rollMsgContent, true, reporter);
   }
   return LDA.promptLuckOnCheckFail(
-    actor, rollTotal, dc, rollMsgId, rollMsgContent, fakeRoll,
-    "Failed Saving Throw", "saving throw"
+    actor, rollTotal, dc, rollMsgId, rollMsgContent, roll,
+    "Failed Saving Throw", "saving throw", true, reporter
   );
 }
 
 /**
  * Emit a midiSaveFailed socket to the owning player and await their result.
- * The Promise resolves when the player's client emits midiSaveResult back.
- * Times out after 60 seconds (player dismissed / no response).
+ * The Promise resolves when the player's client emits midiSaveResult back, or
+ * with null after 60 seconds without a response.
+ *
+ * The player's client can't write to Midi's card (usually owned by whoever used
+ * the item), so it sends each luck step back as midiSaveStep; onStep writes it
+ * here, in order. Each step also restarts the timeout, since the player is still
+ * deciding. The result resolves only after every step has been written.
  */
-function requestMidiSaveFromPlayer(actor, rollTotal, dc, formula, d20Result, rollMsgId, rollMsgContent) {
-  return new Promise((resolve) => {
-    const timeoutId = setTimeout(() => {
-      pendingMidiSaveResults.delete(actor.id);
-      resolve(null);
-    }, 60_000);
-
-    pendingMidiSaveResults.set(actor.id, { resolve, timeoutId });
+function requestMidiSaveFromPlayer(actor, rollTotal, dc, formula, d20Result, rollMsgId, rollMsgContent, onStep = null) {
+  let steps = Promise.resolve();
+  const result = new Promise((resolve) => {
+    const expire  = () => { pendingMidiSaveResults.delete(actor.id); resolve(null); };
+    const pending = { resolve, timeoutId: setTimeout(expire, 60_000) };
+    pending.onStep = (entry) => {
+      clearTimeout(pending.timeoutId);
+      pending.timeoutId = setTimeout(expire, 60_000);
+      if (onStep) steps = steps.then(() => onStep(entry)).catch(err => console.warn(`[${MODULE_ID}] midiSaveStep error:`, err));
+    };
+    pendingMidiSaveResults.set(actor.id, pending);
 
     game.socket.emit(`module.${MODULE_ID}`, {
       type: "midiSaveFailed",
@@ -694,112 +593,62 @@ function requestMidiSaveFromPlayer(actor, rollTotal, dc, formula, d20Result, rol
       d20Result, rollMsgId, rollMsgContent
     });
   });
+  return result.then(async (res) => { await steps; return res; });
+}
+
+/** Resolve the token document, canvas token and actor for a targetSaveDetails key. */
+function resolveSaveTarget(workflow, uuid) {
+  let tokenDoc = null;
+  try { tokenDoc = fromUuidSync(uuid); } catch {}
+  const token = [...(workflow.targets ?? [])].find(
+    t => t === tokenDoc?.object || t.document?.uuid === uuid || t.uuid === uuid || t.actor?.uuid === uuid
+  ) ?? tokenDoc?.object ?? null;
+  const actor = token?.actor ?? tokenDoc?.actor ?? (tokenDoc?.documentName === "Actor" ? tokenDoc : null);
+  return { tokenDoc, token, actor };
 }
 
 /**
- * Patch the save-roll entry in workflow.tokenSaves so Midi counts the token as
- * having passed. Handles both Roll objects and plain-object wrappers.
+ * Turn a failed save into a pass inside Midi's workflow. Runs at postCheckSaves,
+ * after Midi decided the saves and before it renders them or applies damage, so
+ * this patches exactly what Midi reads next:
+ *   - saves / failedSaves: displaySaves(), effect targets, and the damage save
+ *     multiplier (workflow.saves.has(token)) all come from these Sets.
+ *   - saveDisplayData: the per-target row displaySaves() renders.
+ *   - the save roll's total, for anything else that reads targetSaveDetails.
  */
-function patchSaveRoll(saveData, newTotal) {
-  // Direct Roll object or Roll-like with _total
-  if (typeof saveData?._total !== "undefined") {
-    saveData._total = newTotal;
-    return;
-  }
-  // Object that wraps a Roll: {roll: Roll, ...}
-  if (typeof saveData?.roll?._total !== "undefined") {
-    saveData.roll._total = newTotal;
-    return;
-  }
-  // Last resort: redefine the total getter
-  try {
-    Object.defineProperty(saveData, "total", { get: () => newTotal, configurable: true, enumerable: true });
-  } catch (e) {
-    debug(`patchSaveRoll: could not patch total — ${e.message}`);
-  }
-}
+function applyLuckySavePass(workflow, { uuid, details, tokenDoc, token, newTotal, dc }) {
+  const isTarget = (t) => t === token || t === tokenDoc || t === uuid || (t?.document?.uuid ?? t?.uuid) === uuid;
 
-/**
- * After a luck dice save pass, retroactively heal the actor for the "halves"
- * save damage that was already applied. Midi had applied full damage (save failed
- * when postWaitForSaves fired); on a pass the target should have taken half.
- */
-async function retroactivelyFixMidiSaveDamage(workflow, actor) {
-  // Determine onSave damage behavior from the item activity or legacy field.
-  const activities = workflow.item?.system?.activities;
-  let onSave = "none";
-  if (activities) {
-    for (const activity of activities.values()) {
-      if (activity?.save?.damage?.onSave) { onSave = activity.save.damage.onSave; break; }
+  let saved = null;
+  if (workflow.failedSaves instanceof Set) {
+    for (const t of [...workflow.failedSaves]) {
+      if (!isTarget(t)) continue;
+      workflow.failedSaves.delete(t);
+      saved ??= t;
     }
   }
-  if (onSave === "none") {
-    onSave = workflow.item?.system?.save?.onSave ?? "none";
-  }
-  console.log(`[${MODULE_ID}] retroactivelyFixMidiSaveDamage: actor=${actor.name} onSave=${onSave}`);
-  if (onSave !== "halves") return;
+  if (workflow.saves instanceof Set) workflow.saves.add(saved ?? token ?? tokenDoc);
 
-  // Find this actor's damage entry in workflow.damageList.
-  const damageList = Array.isArray(workflow.damageList) ? workflow.damageList : [];
-  console.log(
-    `[${MODULE_ID}] retroactivelyFixMidiSaveDamage: damageList length=${damageList.length}`,
-    damageList.map(d => ({ actorId: d.actorId, tokenId: d.tokenId, applied: d.appliedDamage }))
-  );
-  const entry = damageList.find(
-    d => d.actorId === actor.id || d.tokenId === actor.token?.id
-  );
-  if (!entry) {
-    console.log(`[${MODULE_ID}] retroactivelyFixMidiSaveDamage: no damageList entry for ${actor.name}`);
-    return;
+  const saveRoll = details?.saveRoll;
+  if (saveRoll) {
+    saveRoll._total = newTotal;
+    try {
+      Object.defineProperty(saveRoll, "total", { get() { return newTotal; }, configurable: true, enumerable: true });
+    } catch {}
   }
 
-  // Midi-QoL 13 uses different field names — check several.
-  const applied = Number(entry.appliedDamage ?? entry.applied ?? entry.damageApplied ?? entry.total ?? 0);
-  if (applied <= 0) return;
+  const rowId = (saved ?? token)?.id ?? tokenDoc?.id;
+  const row = workflow.saveDisplayData?.find(r => r.id === rowId || r.target?.document?.uuid === uuid);
+  if (row) {
+    row.rollTotal   = String(newTotal);
+    row.saveSymbol  = String(row.saveSymbol ?? "").replace("fa-xmark", "fa-check");
+    row.saveClass   = "success";
+    row.saveTooltip = `${newTotal} vs DC ${dc} (Luck Dice)`;
+  } else {
+    debug(`applyLuckySavePass: no saveDisplayData row for ${uuid}`);
+  }
 
-  // Full damage was applied; on a pass the target should take half.
-  // Heal the difference: full − floor(full / 2) = ceil(full / 2).
-  const healAmount = applied - Math.floor(applied / 2);
-  if (healAmount <= 0) return;
-
-  const currentHP = Number(actor.system?.attributes?.hp?.value ?? 0);
-  const maxHP     = Number(actor.system?.attributes?.hp?.max   ?? 0);
-  const newHP     = Math.min(currentHP + healAmount, maxHP);
-  console.log(`[${MODULE_ID}] retroactivelyFixMidiSaveDamage: ${actor.name} applied=${applied} healing=${healAmount} hp ${currentHP}→${newHP}`);
-  await actor.update({ "system.attributes.hp.value": newHP });
-}
-
-/**
- * Flip the save indicator in BOTH the stored message.content (so Midi's async
- * enrichment starts from the correct HTML) AND persist a flag so the
- * dnd5e.renderChatMessage hook can re-apply the flip on every subsequent render.
- * Both changes are written in a single server round-trip.
- */
-async function updateMidiSaveCardForActor(workflow, actor, uuid) {
-  const msgId = workflow.itemCardId ?? workflow.chatId ?? workflow.messageId;
-  if (!msgId) { console.log(`[${MODULE_ID}] updateMidiSaveCardForActor: no itemCardId`); return; }
-  const message = game.messages.get(msgId);
-  if (!message) { console.log(`[${MODULE_ID}] updateMidiSaveCardForActor: message ${msgId} not found`); return; }
-
-  // Retrieve luck-dice totals stored in postWaitForSaves.
-  const passData = workflow._luckyMidiPasses?.get(uuid);
-  const newTotal = passData?.newTotal;
-  const dc       = passData?.dc;
-
-  // Bake fa-check (and updated total) into the stored HTML so Midi's async enrichment
-  // starts from the already-correct HTML.
-  const tempDiv = document.createElement("div");
-  tempDiv.innerHTML = message.content ?? "";
-  applyLuckySavePassToDOM(tempDiv, uuid, newTotal, dc);
-
-  // Persist flag with {newTotal, dc} so dnd5e.renderChatMessage can re-apply after enrichment.
-  const existing   = message.getFlag?.(MODULE_ID, "luckyMidiPasses") ?? {};
-  const flagEntry  = { newTotal: newTotal ?? null, dc: dc ?? null };
-  await message.update({
-    content: tempDiv.innerHTML,
-    [`flags.${MODULE_ID}.luckyMidiPasses`]: { ...existing, [uuid]: flagEntry }
-  });
-  console.log(`[${MODULE_ID}] updateMidiSaveCardForActor: content+flag updated for ${actor.name} uuid=${uuid} newTotal=${newTotal ?? "n/a"} dc=${dc ?? "n/a"}`);
+  console.log(`[${MODULE_ID}] applyLuckySavePass: ${token?.name ?? uuid} now passes (${newTotal} vs DC ${dc}) saves=${workflow.saves?.size} failedSaves=${workflow.failedSaves?.size}`);
 }
 
 // ── Hooks ─────────────────────────────────────────────────────────────────────
@@ -811,353 +660,161 @@ Hooks.once("ready", () => {
     return;
   }
 
-  Hooks.on("renderChatMessageHTML", (message, html) => {
-    if (!(html instanceof HTMLElement)) return;
-    // Attack reroll history only — save-pass flip is handled in dnd5e.renderChatMessage
-    // (which fires AFTER Midi's async card enrichment, so it doesn't get overwritten).
-    const reroll = message.getFlag?.(MODULE_ID, "attackReroll");
-    if (reroll?.history?.length >= 2 && !reroll.baked) {
-      applyHistoryToDOM(html, reroll);
-      if (reroll.isHit) updateMidiHitIndicators(html);
-    }
-  });
+  // ── Luck Dice history on Midi's card ───────────────────────────────────────
+  // Both hooks run the same idempotent injection; whichever fires last wins.
+  Hooks.on("renderChatMessageHTML", (message, html) => injectLuckHistory(message, html));
+  Hooks.on("dnd5e.renderChatMessage", (message, html) => injectLuckHistory(message, html));
 
-  // dnd5e.renderChatMessage fires AFTER Midi's async card enrichment completes.
-  // This is the correct place to apply the save-pass flip so enrichment doesn't
-  // overwrite it.  The flag stores { [uuid]: { newTotal, dc } } so we can also
-  // restore the correct save total on each re-render.
-  Hooks.on("dnd5e.renderChatMessage", (message, html) => {
-    if (!(html instanceof Element)) return;
-    const luckyPasses = message.getFlag?.(MODULE_ID, "luckyMidiPasses");
-    if (!luckyPasses) return;
-    for (const [uuid, passData] of Object.entries(luckyPasses)) {
-      // Support both old (boolean true) and new ({newTotal, dc}) flag shapes.
-      const newTotal = typeof passData === "object" && passData !== null ? (passData.newTotal ?? undefined) : undefined;
-      const dc       = typeof passData === "object" && passData !== null ? (passData.dc       ?? undefined) : undefined;
-      applyLuckySavePassToDOM(html, uuid, newTotal, dc);
-    }
-  });
-
-  Hooks.on("midi-qol.AttackRollComplete", async (workflow) => {
-    console.log(`[${MODULE_ID}] AttackRollComplete INVOKED — actor="${workflow?.actor?.name}" wfUserId=${workflow?.userId} myUserId=${game.user.id} isGM=${game.user.isGM}`);
+  // ── Missed attacks ─────────────────────────────────────────────────────────
+  // hitsChecked fires after Midi's checkHits() and before it displays the hits
+  // and final attack roll, so a reroll here is rendered and judged by Midi.
+  Hooks.on("midi-qol.hitsChecked", async (workflow) => {
     try {
       if (!isWorkflowResponder(workflow)) return;
-      const actor    = workflow?.actor;
-      const hasLuck  = isLuckDiceEnabled() && actorHasLuckDice(actor);
-      const hasInsp  = isInspirationEnabled() && actorHasInspiration(actor);
-      console.log(`[${MODULE_ID}] AttackRollComplete fired — actor="${actor?.name}" type=${actor?.type} hasLuck=${hasLuck} hasInsp=${hasInsp} userId=${workflow?.userId}`);
+      const actor   = workflow?.actor;
+      const hasLuck = isLuckDiceEnabled() && actorHasLuckDice(actor);
+      const hasInsp = isInspirationEnabled() && actorHasInspiration(actor);
       if (!hasLuck && !hasInsp) return;
 
-      const hitState = getDefiniteHitState(workflow);
+      const hitState  = getDefiniteHitState(workflow);
+      const d20Result = getKeptD20Result(workflow?.attackRoll);
       console.log(
-        `[${MODULE_ID}] AttackRollComplete:`,
-        `actor="${workflow?.actor?.name}"`,
+        `[${MODULE_ID}] hitsChecked:`,
+        `actor="${actor?.name}"`,
         `item="${workflow?.item?.name}"`,
         `hitState=${hitState}`,
         `attackTotal=${workflow?.attackTotal ?? workflow?.attackRoll?.total ?? "n/a"}`,
-        `d20=${getKeptD20Result(workflow?.attackRoll) ?? "n/a"}`,
+        `d20=${d20Result ?? "n/a"}`,
         `hitTargets=${workflow?.hitTargets?.size ?? "n/a"}`,
         `targets=${workflow?.targets?.size ?? "n/a"}`
       );
+      if (hitState !== false) return;
 
-      if (hitState === false) {
-        const d20Result = getKeptD20Result(workflow?.attackRoll);
-        if (d20Result === 1) {
-          await promptNatOne(workflow);
-        } else {
-          await promptLuckOnMiss(workflow);
-        }
-      }
+      if (d20Result === 1) await promptNatOne(workflow);
+      else await promptLuckOnMiss(workflow);
     } catch (err) {
-      console.error(`[${MODULE_ID}] AttackRollComplete error:`, err);
+      console.error(`[${MODULE_ID}] hitsChecked error:`, err);
     }
   });
 
+  // ── Luck damage ────────────────────────────────────────────────────────────
   Hooks.on("midi-qol.preDamageRoll", async (workflow) => {
     try {
       if (!isLuckDiceEnabled() || !actorHasLuckDice(workflow?.actor)) return;
       if (!isWorkflowResponder(workflow)) return;
       await promptLuckOnDamage(workflow);
-
-      const msgId = workflow.itemCardId ?? workflow.chatId ?? workflow.messageId ?? workflow.chatMessage?.id;
-      if (msgId) {
-        const message = game.messages.get(msgId);
-        const existing = message?.getFlag?.(MODULE_ID, "attackReroll");
-        const state    = getState(workflow);
-        const effectiveHit = getDefiniteHitState(workflow) === true || state.convertedMissToHit === true;
-        if (existing && !existing.isHit && effectiveHit) {
-          await message.setFlag(MODULE_ID, "attackReroll", {
-            ...existing,
-            isHit: true,
-            isCrit: workflow.isCritical === true
-          });
-        }
-      }
     } catch (err) {
       console.error(`[${MODULE_ID}] preDamageRoll error:`, err);
     }
   });
 
-  // ── Midi save failure prompt ─────────────────────────────────────────────────
-  // "postWorkflowState_WaitForSaves" fires AFTER all save rolls are collected
-  // and stored in workflow.targetSaveDetails (the source of the tokenSaves getter).
-  // Midi-QoL 13 awaits async hooks, so we can block here, prompt players, and
-  // patch the underlying saveRoll._total before Midi applies pass/fail outcomes.
-  // Diagnostic listeners — log every save-adjacent hook so we know which names fire.
-  for (const _diagHook of [
-    "midi-qol.preCheckSaves", "midi-qol.postCheckSaves",
-    "midi-qol.preWaitForSaves", "midi-qol.postWaitForSaves",
-    "midi-qol.preSavesComplete", "midi-qol.postSavesComplete",
-    "midi-qol.preApplyDynamicEffects", "midi-qol.postApplyDynamicEffects",
-    "midi-qol.DamageRollComplete",
-  ]) {
-    Hooks.on(_diagHook, (wf) => console.log(`[${MODULE_ID}] DIAG hook fired: ${_diagHook} actor="${wf?.actor?.name}"`));
-  }
-
-  Hooks.on("midi-qol.postWaitForSaves", async (workflow) => {
-    console.log(`[${MODULE_ID}] postWaitForSaves FIRED — actor="${workflow?.actor?.name}" wfUserId=${workflow?.userId} myUserId=${game.user.id} isGM=${game.user.isGM}`);
+  // ── Failed Midi saves ──────────────────────────────────────────────────────
+  // postCheckSaves fires after Midi's checkSaves() and before displaySaves(),
+  // and Midi awaits it — so the player can be prompted here, and a luck pass is
+  // rendered, excluded from effects, and given save damage by Midi itself.
+  Hooks.on("midi-qol.postCheckSaves", async (workflow) => {
     try {
       if (!isWorkflowResponder(workflow)) return;
-
       const luckOn = isLuckDiceEnabled();
       const inspOn = isInspirationEnabled();
       if (!luckOn && !inspOn) return;
 
-      // targetSaveDetails: { [uuid: string]: { saveRoll: Roll, rollDC?: number, ... } }
-      const targetSaveDetails = workflow?.targetSaveDetails;
-      const detailEntries = Object.entries(targetSaveDetails ?? {});
-      console.log(`[${MODULE_ID}] postWaitForSaves: targetSaveDetails keys=[${detailEntries.map(([k]) => k).join(",")}]`);
-      console.log(`[${MODULE_ID}] postWaitForSaves: damageList length=${workflow?.damageList?.length ?? 0}`, (workflow?.damageList ?? []).map(d => ({ actorId: d.actorId, tokenId: d.tokenId, applied: d.appliedDamage, total: d.totalDamage })));
+      const detailEntries = Object.entries(workflow?.targetSaveDetails ?? {});
       if (!detailEntries.length) return;
 
-      // DC: try per-entry first (each target may have a different DC), fall back to workflow-level.
       const workflowDC = Number(
         workflow.saveDetails?.rollDC ??
         workflow.saveDetails?.dc ??
-        workflow.item?.system?.save?.dc ??
-        [...(workflow.item?.system?.activities?.values() ?? [])][0]?.save?.dc ??
+        workflow.activity?.save?.dc?.value ??
         0
       );
-      console.log(`[${MODULE_ID}] postWaitForSaves: workflowDC=${workflowDC}`);
 
       for (const [uuid, details] of detailEntries) {
         const saveRoll  = details?.saveRoll;
         const rollTotal = Number(saveRoll?.total ?? 0);
         const dc        = Number(details?.rollDC ?? details?.saveDetails?.rollDC ?? workflowDC);
-        console.log(`[${MODULE_ID}] postWaitForSaves entry: uuid=${uuid} total=${rollTotal} dc=${dc} detailKeys=[${Object.keys(details ?? {}).join(",")}]`);
-        if (!dc || rollTotal >= dc) continue;
+        const { tokenDoc, token, actor } = resolveSaveTarget(workflow, uuid);
 
-        // Resolve the actor from the UUID (token UUID or actor UUID).
-        let actor = null;
-        try {
-          const doc = fromUuidSync ? fromUuidSync(uuid) : null;
-          actor = doc?.actor ?? (doc?.documentName === "Actor" ? doc : null);
-        } catch {}
-        if (!actor) {
-          const token = [...(workflow.targets ?? [])].find(
-            t => t.document?.uuid === uuid || t.uuid === uuid || t.actor?.uuid === uuid
-          );
-          actor = token?.actor;
-        }
-        console.log(`[${MODULE_ID}] postWaitForSaves: resolved actor=${actor?.name ?? "null"} type=${actor?.type ?? "null"}`);
+        // Only a genuine low roll Midi counted as a failure. A total that meets
+        // the DC but still failed is an auto-fail (e.g. paralyzed) — dice can't help.
+        const failed = token && workflow.failedSaves instanceof Set ? workflow.failedSaves.has(token) : true;
+        debug(`postCheckSaves: ${actor?.name ?? uuid} total=${rollTotal} dc=${dc} failed=${failed}`);
+        if (!dc || rollTotal >= dc || !failed) continue;
         if (!actor || actor.type !== "character") continue;
 
         const hasLuck = luckOn && actorHasLuckDice(actor);
         const hasInsp = inspOn && actorHasInspiration(actor);
-        console.log(`[${MODULE_ID}] postWaitForSaves: hasLuck=${hasLuck} hasInsp=${hasInsp}`);
         if (!hasLuck && !hasInsp) continue;
 
-        // Find the save's chat message (last few messages matching actor + total).
-        const saveMsg = game.messages.contents.slice(-10).reverse().find(m =>
-          m.rolls?.some(r => Number(r?.total) === rollTotal) &&
-          (m.speaker?.actor === actor.id || m.content?.includes(actor.name))
-        );
-        const rollMsgId      = saveMsg?.id      ?? null;
-        const rollMsgContent = saveMsg?.content ?? "";
-        const formula        = saveRoll?.formula ?? "1d20";
-        const d20Result      = getKeptD20Result(saveRoll) ?? null;
+        const formula   = saveRoll?.formula ?? "1d20";
+        const d20Result = getKeptD20Result(saveRoll) ?? null;
 
-        // Route to the correct client and await the result.
-        const activeOwner = game.users.find(
-          u => !u.isGM && u.active && actor.testUserPermission(u, "OWNER")
-        );
-        console.log(`[${MODULE_ID}] postWaitForSaves: activeOwner=${activeOwner?.name ?? "none"}`);
+        // Each luck step is written to Midi's card under the saves as it happens.
+        const target = { uuid, name: token?.name ?? actor.name, start: rollTotal };
+        const report = (entry) => recordSaveLuck(workflow, target, entry);
 
-        let result;
-        if (!activeOwner || activeOwner.id === game.user.id) {
-          result = await runMidiSavePrompt(actor, rollTotal, dc, formula, d20Result, rollMsgId, rollMsgContent);
-        } else {
-          result = await requestMidiSaveFromPlayer(actor, rollTotal, dc, formula, d20Result, rollMsgId, rollMsgContent);
-        }
+        // Route to the owning player's client when they're online; otherwise prompt here.
+        const activeOwner = game.users.find(u => !u.isGM && u.active && actor.testUserPermission(u, "OWNER"));
+        const result = (!activeOwner || activeOwner.id === game.user.id)
+          ? await runMidiSavePrompt(actor, rollTotal, dc, formula, d20Result, null, "", saveRoll, report)
+          : await requestMidiSaveFromPlayer(actor, rollTotal, dc, formula, d20Result, null, "", report);
 
-        console.log(`[${MODULE_ID}] postWaitForSaves: ${actor.name} result=${JSON.stringify(result)}`);
-
-        // ── Luck-dice save pass: inject result into Midi before it applies damage ──
-        if (result?.passed && result.finalTotal >= dc) {
-          const newTotal = result.finalTotal;
-
-          // 1) Patch the saveRoll object in targetSaveDetails so tokenSaves getter sees a pass.
-          if (saveRoll) {
-            saveRoll._total = newTotal;
-            // Also override .total as a direct property (handles plain-object saveRolls that
-            // don't use a getter) and redefine the getter to be sure.
-            try { saveRoll.total = newTotal; } catch {}
-            try {
-              Object.defineProperty(saveRoll, "total", {
-                get() { return newTotal; }, configurable: true, enumerable: true
-              });
-            } catch {}
-          }
-
-          // 2) Midi caches pass/fail in workflow.saves and workflow.failedSaves during
-          //    checkSaves().  Patch those Sets directly so applySaves() sees a pass.
-          let tokenDoc = null;
-          try { tokenDoc = fromUuidSync ? fromUuidSync(uuid) : null; } catch {}
-          // fromUuidSync on a token UUID returns TokenDocument; .object is the canvas Token5e.
-          const tokenObj = tokenDoc?.object ?? canvas?.tokens?.get(tokenDoc?.id) ?? null;
-
-          console.log(`[${MODULE_ID}] postWaitForSaves sets BEFORE: saves=${workflow.saves?.size ?? typeof workflow.saves} failedSaves=${workflow.failedSaves?.size ?? typeof workflow.failedSaves}`);
-
-          if (workflow.failedSaves instanceof Set) {
-            // Remove every representation of this target.
-            if (tokenObj) workflow.failedSaves.delete(tokenObj);
-            if (tokenDoc) workflow.failedSaves.delete(tokenDoc);
-            workflow.failedSaves.delete(uuid);
-            for (const entry of [...workflow.failedSaves]) {
-              const eUuid    = entry?.document?.uuid ?? entry?.uuid ?? null;
-              const eActorId = entry?.actor?.id ?? entry?.document?.actor?.id ?? null;
-              if (eUuid === uuid || eActorId === actor.id) workflow.failedSaves.delete(entry);
-            }
-          }
-
-          if (workflow.saves instanceof Set) {
-            // Add whichever representation Midi uses.
-            if (tokenObj) workflow.saves.add(tokenObj);
-            if (tokenDoc) workflow.saves.add(tokenDoc);
-          }
-
-          console.log(`[${MODULE_ID}] postWaitForSaves sets AFTER: saves=${workflow.saves?.size ?? typeof workflow.saves} failedSaves=${workflow.failedSaves?.size ?? typeof workflow.failedSaves} — ${actor.name} NOW PASSES`);
-
-          // 3a) Patch the details object itself: some Midi paths read details.passed /
-          //     details.isSave / details.success directly instead of consulting the Sets.
-          if (details) {
-            try { details.passed  = true;  } catch {}
-            try { details.isSave  = true;  } catch {}
-            try { details.success = true;  } catch {}
-            try { details.failed  = false; } catch {}
-            // Store the new total on the details object too so any downstream accessor sees it.
-            try { details.saveTotal = newTotal; } catch {}
-          }
-
-          // 3) Store the result so RollComplete can update the spell card and, if needed,
-          //    retroactively heal (in case damage was already applied before this hook).
-          if (!workflow._luckyMidiPasses) workflow._luckyMidiPasses = new Map();
-          workflow._luckyMidiPasses.set(uuid, { actor, newTotal, dc });
-
-          // 4) If damage was already applied (unusual timing), retroactively heal now.
-          if (Array.isArray(workflow.damageList) && workflow.damageList.length > 0) {
-            await retroactivelyFixMidiSaveDamage(workflow, actor);
-          }
+        console.log(`[${MODULE_ID}] postCheckSaves: ${actor.name} result=${JSON.stringify(result)}`);
+        const passed = !!(result?.passed && result.finalTotal >= dc);
+        await finishSaveLuck(workflow, uuid, passed);
+        if (passed) {
+          applyLuckySavePass(workflow, { uuid, details, tokenDoc, token, newTotal: result.finalTotal, dc });
         }
       }
     } catch (err) {
-      console.error(`[${MODULE_ID}] postWaitForSaves error:`, err);
+      console.error(`[${MODULE_ID}] postCheckSaves error:`, err);
     }
   });
 
-  // ── Lucky Midi save passes — card update + retroactive heal (fires after everything) ──
-  Hooks.on("midi-qol.RollComplete", async (workflow) => {
-    const passes = workflow._luckyMidiPasses;
-    if (!passes?.size) return;
-    try {
-      // Log damage-tracking fields so we can see what's populated after Midi finishes.
-      console.log(
-        `[${MODULE_ID}] RollComplete (luckyPasses):`,
-        `passes=${passes.size}`,
-        `damageList=${workflow.damageList?.length ?? "n/a"}`,
-        `damageDetailArr=${workflow.damageDetailArr?.length ?? "n/a"}`,
-        `saves=${workflow.saves?.size ?? typeof workflow.saves}`,
-        `failedSaves=${workflow.failedSaves?.size ?? typeof workflow.failedSaves}`
-      );
-      if (workflow.damageList?.length) {
-        console.log(`[${MODULE_ID}] RollComplete damageList entries=`,
-          workflow.damageList.map(d => ({ actorId: d.actorId, tokenId: d.tokenId, applied: d.appliedDamage, total: d.totalDamage, uuid: d.uuid })));
-      }
-      for (const [uuid, { actor, dc }] of passes) {
-        // Log current HP so we can verify whether createReverseDamageCard already healed.
-        const curHP = actor.system?.attributes?.hp?.value;
-        console.log(`[${MODULE_ID}] RollComplete (luckyPasses): ${actor.name} currentHP=${curHP}`);
-        // If damage was applied (damageList now populated), retroactively heal.
-        if (Array.isArray(workflow.damageList) && workflow.damageList.length > 0) {
-          await retroactivelyFixMidiSaveDamage(workflow, actor);
-        }
-        // Update spell card — all Midi rendering is done by RollComplete.
-        await updateMidiSaveCardForActor(workflow, actor, uuid);
-      }
-    } catch (err) {
-      console.error(`[${MODULE_ID}] RollComplete (luckyPasses) error:`, err);
-    }
-  });
-
+  // ── Workflow cleanup ───────────────────────────────────────────────────────
   Hooks.on("midi-qol.RollComplete", async (workflow) => {
     try {
-      if (!isLuckDiceEnabled() || !actorHasLuckDice(workflow?.actor)) return;
-      if (!isWorkflowResponder(workflow)) return;
-      const state = getState(workflow);
-
-      // Permanently bake the reroll history into message.content.
-      const msgId = workflow.itemCardId ?? workflow.chatId ?? workflow.messageId ?? workflow.chatMessage?.id;
-      if (msgId) {
-        const message = game.messages.get(msgId);
-        const reroll  = message?.getFlag?.(MODULE_ID, "attackReroll");
-        if (reroll?.history?.length >= 2 && !reroll.baked) {
-          const tempDiv     = document.createElement("div");
-          tempDiv.innerHTML = message.content ?? "";
-          const historyApplied = applyHistoryToDOM(tempDiv, reroll);
-          if (reroll.isHit) updateMidiHitIndicators(tempDiv);
-          if (historyApplied) {
-            await message.update({
-              content: tempDiv.innerHTML,
-              [`flags.${MODULE_ID}.attackReroll`]: { ...reroll, baked: true }
-            });
-            debug("RollComplete: baked attack history + hit indicators into message.content");
-          }
+      const key = getWorkflowKey(workflow);
+      if (isLuckDiceEnabled() && actorHasLuckDice(workflow?.actor) && isWorkflowResponder(workflow)) {
+        const kind   = workflow?.workflowType ?? workflow?.item?.system?.actionType ?? workflow?.type;
+        const failed = workflow?.failed === true || workflow?.isFailed === true || workflow?.success === false;
+        debug(`RollComplete: kind=${kind} failed=${failed}`);
+        if ((kind === "save" || kind === "check") && failed) {
+          await maybeRegainLuckDie(workflow.actor, getState(workflow));
         }
       }
-
-      const kind   = workflow?.workflowType ?? workflow?.item?.system?.actionType ?? workflow?.type;
-      const failed = workflow?.failed === true || workflow?.isFailed === true || workflow?.success === false;
-      console.log(`[${MODULE_ID}] RollComplete: kind=${kind} failed=${failed}`);
-      if ((kind === "save" || kind === "check") && failed) {
-        await maybeRegainLuckDie(workflow.actor, state);
-      }
-      workflowState.delete(getWorkflowKey(workflow));
+      workflowState.delete(key);
     } catch (err) {
       console.error(`[${MODULE_ID}] RollComplete error:`, err);
     }
   });
 
-  // ── Concentration save luck dice ─────────────────────────────────────────────
-  // Midi-QoL completely replaces dnd5e's concentration check with its own
-  // request-card system, so dnd5e.rollConcentration never fires.
+  // ── Concentration save luck dice ───────────────────────────────────────────
+  // Midi rolls concentration through actor.rollConcentration and ends it with
+  // dnd5e's actor.endConcentration(), which deletes the effect. preDeleteActiveEffect
+  // fires SYNCHRONOUSLY on the client that calls delete(); returning false cancels
+  // it. We then run the luck prompt and re-delete manually if the save still fails.
   //
-  // The correct interception point is preDeleteActiveEffect, which fires
-  // SYNCHRONOUSLY on the same client that calls effect.delete() — that is the
-  // player's client (confirmed by the socket call-stack in Midi's debug logs).
-  // Returning false cancels the server delete request; we then run the luck dice
-  // prompt asynchronously and re-trigger the delete manually if the player fails.
+  // Only deletions caused by a failed concentration *save* are intercepted: the
+  // actor's recent roll message must be a concentration roll (dnd5e 6 marks it
+  // system.type "concentration"; Midi's wrapper adds flags.midi-qol.isConcentrationCheck).
+  // Removals with no save — dropping to 0 HP, an incapacitating condition, casting
+  // another concentration spell, dismissing it — pass straight through.
   //
-  // pendingConcentrationPrompts prevents recursion: our own re-delete call would
-  // otherwise re-enter this handler, but the actor.id entry is gone by then.
+  // pendingConcentrationPrompts prevents recursion: while an actor's entry exists,
+  // our own re-delete short-circuits at the guard below and is allowed through.
   const pendingConcentrationPrompts = new Map(); // actorId → pending object
 
+  const isConcentrationEffect = (e) =>
+    e.statuses?.has("concentrating") ||
+    /concentrat/i.test(e.name  ?? "") ||
+    /concentrat/i.test(e.label ?? "");
+
+  const isConcentrationRollMessage = (m) =>
+    m.system?.type === "concentration" || !!m.getFlag?.("midi-qol", "isConcentrationCheck");
+
   Hooks.on("preDeleteActiveEffect", (effect, options, userId) => {
-    // Must be a concentration effect.
-    const isConc =
-      effect.statuses?.has("concentrating") ||
-      /concentrat/i.test(effect.name  ?? "") ||
-      /concentrat/i.test(effect.label ?? "");
-    if (!isConc) return;
+    if (!isConcentrationEffect(effect)) return;
 
     const actor = effect.parent;
     if (!actor || actor.type !== "character") return;
@@ -1173,27 +830,26 @@ Hooks.once("ready", () => {
     if (activeOwner && activeOwner.id !== game.user.id) return;
     if (!activeOwner && !game.user.isGM) return;
 
-    // Guard: already being handled (prevents re-entry when we re-delete after failure).
+    // Guard: already being handled (lets our own re-delete through).
     if (pendingConcentrationPrompts.has(actor.id)) return;
 
-    // Require a recent (≤30 s) save-roll message for this actor.  This distinguishes
-    // a failed-concentration-save deletion from a voluntary end (casting another
-    // concentration spell, dismissing it, etc.).
-    const now          = Date.now();
-    const concSaveMsg  = game.messages.contents.slice(-8).reverse().find(m => {
-      if (now - m.timestamp > 30_000) return false;
-      if (!m.rolls?.length)           return false;
-      return m.speaker?.actor === actor.id || m.content?.includes(actor.name);
-    });
+    // Require a recent (≤30 s) concentration roll by this actor.
+    const now         = Date.now();
+    const concSaveMsg = game.messages.contents.slice(-8).reverse().find(m =>
+      now - m.timestamp <= 30_000 &&
+      m.rolls?.length &&
+      m.speaker?.actor === actor.id &&
+      isConcentrationRollMessage(m)
+    );
     if (!concSaveMsg) {
-      console.log(`[${MODULE_ID}] preDeleteActiveEffect: no recent save message — not intercepting concentration end for ${actor.name}`);
+      debug(`preDeleteActiveEffect: no recent concentration roll — not intercepting concentration end for ${actor.name}`);
       return;
     }
 
     const roll  = concSaveMsg.rolls[0];
     const total = Number(roll?.total ?? 0);
-    // DC: dnd5e 5.x stores the current check DC on actor.concentration.dc.
-    const dc    = Number(actor.concentration?.dc ?? 10);
+    // DC: the roll carries its target; fall back to the actor's concentration DC.
+    const dc    = Number(roll?.options?.target ?? actor.concentration?.dc ?? 10);
 
     // If the roll actually PASSED the DC, this is not a failure deletion — skip.
     if (total >= dc) return;
@@ -1210,10 +866,7 @@ Hooks.once("ready", () => {
 
     (async () => {
       try {
-        const result = await runMidiSavePrompt(
-          actor, total, dc, formula, d20Result,
-          concSaveMsg.id, concSaveMsg.content ?? ""
-        );
+        const result = await runMidiSavePrompt(actor, total, dc, formula, d20Result, null, "", roll);
         console.log(`[${MODULE_ID}] preDeleteActiveEffect conc: ${actor.name} result=${JSON.stringify(result)}`);
         pending.shouldDelete = !(result?.passed && result.finalTotal >= dc);
       } catch (err) {
@@ -1222,19 +875,12 @@ Hooks.once("ready", () => {
       } finally {
         pending.resolve();
         if (pending.shouldDelete) {
-          const concEffect =
-            actor.effects.get(pending.effectId) ??
-            actor.effects.find(e =>
-              e.statuses?.has("concentrating") ||
-              /concentrat/i.test(e.name  ?? "") ||
-              /concentrat/i.test(e.label ?? ""));
+          const concEffect = actor.effects.get(pending.effectId) ?? actor.effects.find(isConcentrationEffect);
           if (concEffect) {
             // Keep the pending guard set across this delete. The call re-enters
             // this hook synchronously; the pendingConcentrationPrompts guard above
             // short-circuits it (returns undefined, NOT false) so the deletion
-            // proceeds instead of re-prompting. Clearing the guard before this
-            // point caused the re-delete to be re-intercepted, looping forever and
-            // handing out a Luck Die on every pass when no dice remained.
+            // proceeds instead of re-prompting.
             await concEffect.delete();
             console.log(`[${MODULE_ID}] preDeleteActiveEffect: concentration removed for ${actor.name} after failed luck dice`);
           } else {
