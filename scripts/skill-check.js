@@ -7,7 +7,7 @@
 const LDA = window.LDA;
 const {
   MODULE_ID, LUCK_DICE_ITEM_NAME, IMPACT_DICE_ITEM_NAME,
-  workflowState, pendingMidiSaveResults, clamp, debug,
+  workflowState, pendingMidiSaveResults, requestRollActors, clamp, debug,
   getDiceUses, updateLuckUses, actorHasLuckDice,
   promptChoice, promptSlider, getKeptD20Result, spendDiceFromPools,
   evaluateReroll, buildDiceAvailableHTML, whisperLuckRegain,
@@ -365,7 +365,10 @@ async function rollSkillForCheck(actor, checkValue, dc, showDC = false, gmCardId
                    : {};
   legacyOpts.rollMode = PUBLIC_ROLL_MODE;
 
+  // This flow runs its own luck prompt below, so mark the actor while it rolls
+  // to keep native mode's post-roll hooks from prompting a second time.
   let rollResult = null;
+  requestRollActors.add(actor.id);
   try {
     if (type === "skill") {
       rollResult = await actor.rollSkill(rollConfig, dialogConfig, messageConfig);
@@ -393,6 +396,8 @@ async function rollSkillForCheck(actor, checkValue, dc, showDC = false, gmCardId
   } catch (e) {
     console.error(`[${MODULE_ID}] rollSkillForCheck: roll error for ${actor.name}:`, e);
     return;
+  } finally {
+    requestRollActors.delete(actor.id);
   }
 
   // Modern dnd5e roll methods return an array of rolls (D20Roll[]); legacy
@@ -439,9 +444,11 @@ async function rollSkillForCheck(actor, checkValue, dc, showDC = false, gmCardId
 // ── Luck dice prompt for failed checks ───────────────────────────────────────
 
 /**
- * reporter: optional async (entry) => void. When given (Midi saves), each reroll
- * or add-dice step is reported to it — for display on Midi's card — instead of
- * being written to a roll card here. entry: { label, total, detail }.
+ * reporter: optional async (entry, rolls) => void. When given (Midi saves, native
+ * dnd5e rolls), each reroll or add-dice step is reported to it — for display on
+ * that mode's card — instead of being written to a roll card here.
+ * entry: { label, total, detail }; rolls: { roll } for a reroll (the new roll) or
+ * { bonusRoll } for added dice, for a caller that rewrites the card's roll.
  */
 async function promptLuckOnCheckFail(actor, rollTotal, dc, rollMsgId = null, rollMsgContent = "", originalRoll = null, dialogTitle = "Failed Skill Check", rollType = "skill check", showDC = true, reporter = null) {
   // Permission guard: only the actor's owner (or GM) may see the dialog.
@@ -479,7 +486,7 @@ async function promptLuckOnCheckFail(actor, rollTotal, dc, rollMsgId = null, rol
   // the roll card (or a new card) immediately so the player sees the new total.
   async function showReroll(newRoll, cardLabel, reportLabel) {
     if (reporter) {
-      await reporter({ label: reportLabel, total: Number(newRoll.total ?? 0), detail: `d20: ${getKeptD20Result(newRoll) ?? "?"}` });
+      await reporter({ label: reportLabel, total: Number(newRoll.total ?? 0), detail: `d20: ${getKeptD20Result(newRoll) ?? "?"}` }, { roll: newRoll });
       return;
     }
     const rerollHtml = await newRoll.render();
@@ -605,7 +612,7 @@ async function promptLuckOnCheckFail(actor, rollTotal, dc, rollMsgId = null, rol
 
       if (reporter) {
         const faces = (bonusRoll.dice ?? []).flatMap(d => (d.results ?? []).filter(r => r.active !== false).map(r => r.result));
-        await reporter({ label: `Added ${diceCount}d6 Luck Dice`, total: currentTotal, detail: `${faces.join(", ")} = +${bonusRoll.total}` });
+        await reporter({ label: `Added ${diceCount}d6 Luck Dice`, total: currentTotal, detail: `${faces.join(", ")} = +${bonusRoll.total}` }, { bonusRoll });
       } else {
         bonusMsgId = await postCheckBonus(actor, baseTotal, allBonusRolls, currentTotal, dc, bonusMsgId, currentBaseMsgContent, rollType, showDC);
       }

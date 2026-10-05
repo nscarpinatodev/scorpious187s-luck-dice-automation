@@ -273,17 +273,65 @@ async function spendDiceFromPools(actor, count) {
 }
 
 /**
- * Evaluate a fresh roll using the same formula and data as originalRoll, then
- * show a Dice So Nice animation visible to all players.
+ * Build an unevaluated reroll of originalRoll. A reroll keeps advantage and
+ * drops disadvantage; forceAdvantage gives advantage regardless (Inspiration
+ * with the inspirationAdvantage setting).
+ *
+ * dnd5e 6 writes advantage as an `adv` / `dis` die modifier (1d20dis + 5), not
+ * kh/kl, so a D20Roll is rebuilt through D20Roll itself: its constructor
+ * re-applies the advantage mode, crit range, DC and Reliable Talent, so the
+ * reroll keeps the original's crit/success styling and hit/miss evaluation.
+ * A roll rebuilt from a formula (sent over the socket) falls back to editing
+ * the formula, covering both notations.
+ */
+function buildReroll(originalRoll, { forceAdvantage = false } = {}) {
+  const D20Roll = CONFIG.Dice.D20Roll;
+  if (D20Roll && originalRoll instanceof D20Roll && originalRoll.validD20Roll) {
+    const ADV  = D20Roll.ADV_MODE;
+    const mode = forceAdvantage || originalRoll.options.advantageMode === ADV.ADVANTAGE ? ADV.ADVANTAGE : ADV.NORMAL;
+    return new D20Roll(originalRoll.formula, originalRoll.data ?? {}, {
+      ...foundry.utils.deepClone(originalRoll.options), advantageMode: mode, configured: false
+    });
+  }
+  const formula = originalRoll.formula ?? "1d20";
+  return new Roll(forceAdvantage
+    ? formula.replace(/\b\d+d20(?:k[hl]\d*|adv\d?|dis)?/i, "2d20kh")
+    : formula.replace(/\b\d+d20(?:kl\d*|dis)/gi, "1d20"),
+    originalRoll.data ?? {});
+}
+
+/**
+ * Evaluate a luck dice reroll of originalRoll, then show a Dice So Nice
+ * animation visible to all players.
  * Dice spending is the caller's responsibility — call this AFTER spending.
  */
 async function evaluateReroll(originalRoll) {
-  // Advantage (kh) is preserved; disadvantage (kl) rerolls as a plain d20.
-  // e.g. "2d20kl1 + 5" or "2d20kl + 5" → "1d20 + 5", "2d20kh1 + 5" stays unchanged.
-  const formula = (originalRoll.formula ?? "").replace(/\b\d+d20kl\d*\b/gi, "1d20");
-  const newRoll = await new Roll(formula, originalRoll.data ?? {}).evaluate();
+  const newRoll = await buildReroll(originalRoll).evaluate();
   if (game.dice3d) await game.dice3d.showForRoll(newRoll, game.user, true, null, false);
   return newRoll;
+}
+
+/**
+ * Merge an evaluated bonus roll (luck d6s) into an evaluated base roll. The
+ * result keeps the base roll's class and options — a D20Roll stays a D20Roll,
+ * so dnd5e still judges it against the DC (isSuccess compares the full total)
+ * and the target's AC.
+ */
+function combineRolls(baseRoll, bonusRoll) {
+  try {
+    const plus = new foundry.dice.terms.OperatorTerm({ operator: "+" });
+    plus._evaluated = true;
+    const combined = baseRoll.constructor.fromTerms(
+      [...baseRoll.terms, plus, ...bonusRoll.terms],
+      foundry.utils.deepClone(baseRoll.options)
+    );
+    debug(`combineRolls: ${baseRoll.total} + ${bonusRoll.total} = ${combined.total} (${combined.constructor.name})`);
+    return combined;
+  } catch (e) {
+    debug(`combineRolls: fromTerms failed (${e.message}), patching _total`);
+    baseRoll._total = (baseRoll._total ?? baseRoll.total) + bonusRoll.total;
+    return baseRoll;
+  }
 }
 
 /** HTML snippet showing available dice counts. */
@@ -324,6 +372,11 @@ function isLuckDiceEnabled() {
   try { return game.settings.get(MODULE_ID, "enableLuckDice"); } catch { return true; }
 }
 
+/** Native mode attack automation: "off" | "prompt" | "roll" | "apply". */
+function getAttackAutomation() {
+  try { return game.settings.get(MODULE_ID, "attackAutomation"); } catch { return "off"; }
+}
+
 function isInspirationEnabled() {
   try { return game.settings.get(MODULE_ID, "enableInspiration"); } catch { return false; }
 }
@@ -344,21 +397,81 @@ async function consumeInspiration(actor) {
 
 /**
  * Reroll using Inspiration. Honours the "inspirationAdvantage" setting:
- *   on  → always uses advantage (2d20kh1), overriding any existing adv/disadv.
- *   off → plain reroll (strips disadvantage, same as evaluateReroll).
+ *   on  → always uses advantage, overriding any existing adv/disadv.
+ *   off → plain reroll (keeps advantage, drops disadvantage, as evaluateReroll).
  */
 async function evaluateInspirationReroll(originalRoll) {
   let useAdvantage = false;
   try { useAdvantage = game.settings.get(MODULE_ID, "inspirationAdvantage"); } catch {}
 
-  const formula = useAdvantage
-    ? (originalRoll.formula ?? "").replace(/\b\d+d20(?:k[hl]\d+)?\b/gi, "2d20kh1")
-    : (originalRoll.formula ?? "").replace(/\b\d+d20kl\d*\b/gi, "1d20");
-
-  const newRoll = await new Roll(formula, originalRoll.data ?? {}).evaluate();
+  const newRoll = await buildReroll(originalRoll, { forceAdvantage: useAdvantage }).evaluate();
   if (game.dice3d) await game.dice3d.showForRoll(newRoll, game.user, true, null, false);
   return newRoll;
 }
+
+// ── Luck Dice history (shared by Midi and native modes) ───────────────────────
+// Rendered under the roll on whichever card the dice were spent on.
+// History shape: { start, entries: [{ kind, label, total?, detail? }], verdict? }
+// Entries without a total (luck damage) render as a plain line.
+
+const HISTORY_FLAG = "luckHistory";
+const VERDICTS     = { hit: ["HIT", true], miss: ["MISS", false], passed: ["PASSED", true], failed: ["FAILED", false] };
+
+/** Active die faces of a roll, e.g. [4, 3] for 2d6. */
+function diceFaces(roll) {
+  return (roll?.dice ?? []).flatMap(d => (d.results ?? []).filter(r => r.active !== false).map(r => r.result));
+}
+
+/** The icon for one luck step, from its (module-generated) label. */
+function stepIcon(label = "") {
+  if (/inspiration/i.test(label)) return "fa-star";
+  if (/^added/i.test(label))      return "fa-plus";
+  return "fa-rotate";
+}
+
+/**
+ * One history as a card row, matching dnd5e 6's card layout (an icon column
+ * beside the content, like its `section.icon-row` roll rows):
+ *
+ *   🍀 Luck Dice                                MISS
+ *      9 → ↻11 → ↻9 → ↻12                   (superseded totals struck; hover a step for details)
+ *      ✸ +2d6 Luck Dice to damage
+ *
+ * Laid out with inline flex so it also renders inside Midi's card, which
+ * doesn't carry dnd5e's icon-row styles. Returns a detached element.
+ */
+function renderLuckSection(history, { className = "lda-luck-history", title = "Luck Dice" } = {}) {
+  const escape   = foundry.utils.escapeHTML ?? ((s) => String(s));
+  const hasTotal = (e) => e.total !== undefined && e.total !== null;
+  const steps    = history.entries.filter(hasTotal);
+  const notes    = history.entries.filter(e => !hasTotal(e));
+
+  const token = (value, tooltip, icon, last) => `
+    <span data-tooltip="${escape(tooltip)}" style="white-space:nowrap;${last ? "font-weight:bold;font-size:1.1em;" : "text-decoration:line-through;opacity:0.55;"}">${icon ? `<i class="fa-solid ${icon}" style="font-size:0.7em;opacity:0.7;margin-right:2px"></i>` : ""}${value}</span>`;
+  const chain = [];
+  if (steps.length && history.start !== null && history.start !== undefined) chain.push(token(history.start, "Original roll", null, false));
+  steps.forEach((e, i) => chain.push(token(e.total, e.detail ? `${e.label} (${e.detail})` : e.label, stepIcon(e.label), i === steps.length - 1)));
+
+  const [verdict, good] = VERDICTS[history.verdict] ?? [];
+  const wrapper = document.createElement("div");
+  wrapper.innerHTML = `
+    <section class="icon-row ${className}" style="display:flex;align-items:flex-start;gap:6px;margin:2px 0">
+      <i class="fa-fw fa-solid fa-clover" aria-label="Luck Dice" style="margin-top:2px;opacity:0.8"></i>
+      <div style="flex:1;min-width:0">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;gap:6px">
+          <strong>${escape(title)}</strong>
+          ${verdict ? `<strong style="color:${good ? "#719f50" : "#c0392b"}">${verdict}</strong>` : ""}
+        </div>
+        ${chain.length ? `<div style="display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 6px">${chain.join(`<span style="opacity:0.5">→</span>`)}</div>` : ""}
+        ${notes.map(n => `<div style="opacity:0.85"><i class="fa-solid fa-burst" style="font-size:0.8em;margin-right:3px"></i>${escape(n.label)}</div>`).join("")}
+      </div>
+    </section>`.trim();
+  return wrapper.firstElementChild;
+}
+
+// Actors whose d20 roll is in progress through the roll-request window. That
+// flow runs its own luck prompt, so native mode's post-roll hooks skip them.
+const requestRollActors = new Set();
 
 // ── Module settings ───────────────────────────────────────────────────────────
 
@@ -413,6 +526,24 @@ Hooks.once("init", () => {
     default: false
   });
 
+  game.settings.register(MODULE_ID, "attackAutomation", {
+    name: "Attack Automation (without Midi-QoL)",
+    hint: "What happens after an attack hits, once any Luck Dice are spent. " +
+          "Prompt: a one-click \"Roll Damage\" prompt. Roll: damage is rolled automatically. " +
+          "Roll and apply: damage is rolled and applied to each hit target (by the GM's client, " +
+          "with resistances handled by dnd5e). Ignored when Midi-QoL is active.",
+    scope: "world",
+    config: true,
+    type: String,
+    choices: {
+      off:    "Off",
+      prompt: "Prompt to roll damage",
+      roll:   "Roll damage on hit",
+      apply:  "Roll and apply damage on hit"
+    },
+    default: "off"
+  });
+
   game.settings.register(MODULE_ID, "debug", {
     name: "Debug Logging",
     hint: "Print detailed Scorpious187's Luck Dice Automation messages to the browser console. " +
@@ -435,9 +566,10 @@ return {
   actorHasLuckDice, isWorkflowResponder,
   promptChoice, promptSlider,
   buildFakeRoll, getKeptD20Result,
-  spendDiceFromPools, evaluateReroll, buildDiceAvailableHTML,
+  spendDiceFromPools, evaluateReroll, combineRolls, buildDiceAvailableHTML,
   whisperLuckRegain, maybeRegainLuckDie,
-  isLuckDiceEnabled, isInspirationEnabled,
+  isLuckDiceEnabled, isInspirationEnabled, getAttackAutomation,
   actorHasInspiration, consumeInspiration, evaluateInspirationReroll,
+  HISTORY_FLAG, diceFaces, renderLuckSection, requestRollActors,
 };
 })();

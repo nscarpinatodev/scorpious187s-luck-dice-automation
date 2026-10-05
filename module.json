@@ -1,7 +1,7 @@
 {
   "id": "scorpious187s-luck-dice-automation",
   "title": "Scorpious187's Luck Dice Automation",
-  "description": "Automates Luck Dice prompts for attacks, damage, and failed checks/saves with Midi-QoL.",
+  "description": "Automates Luck Dice prompts for attacks, damage, and failed checks/saves — on dnd5e 6 native rolls, or with Midi-QoL when it is active.",
   "version": "1.2.0",
   "compatibility": {
     "minimum": "14.368",
@@ -16,7 +16,8 @@
     "scripts/core.js",
     "scripts/attack.js",
     "scripts/skill-check.js",
-    "scripts/saving-throw.js"
+    "scripts/saving-throw.js",
+    "scripts/native.js"
   ],
   "socket": true,
   "packs": [
@@ -45,19 +46,22 @@
     ],
     "requires": [
       {
-        "id": "midi-qol",
-        "type": "module",
-        "compatibility": {
-          "minimum": "14.6.0"
-        }
-      },
-      {
         "id": "scorpious187s-lib",
         "type": "module",
         "manifest": "https://github.com/nscarpinatodev/scorpious187s-lib/releases/latest/download/module.json",
         "compatibility": {
           "minimum": "0.3.0"
         }
+      }
+    ],
+    "recommends": [
+      {
+        "id": "midi-qol",
+        "type": "module",
+        "compatibility": {
+          "minimum": "14.6.0"
+        },
+        "reason": "Optional. With Midi-QoL active, Luck Dice work inside Midi workflows; without it, on dnd5e native rolls."
       }
     ]
   },

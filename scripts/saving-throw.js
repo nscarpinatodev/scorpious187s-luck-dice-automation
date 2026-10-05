@@ -30,9 +30,10 @@ console.log(`[${MODULE_ID}] saving-throw.js parsed — user=${game?.user?.name ?
  *
  * Returns { finalTotal, passed } or null (cancelled / could not spend).
  *
- * reporter: optional async (entry) => void. When given (Midi saves), each reroll
- * is reported to it — for display on Midi's card — instead of being written to a
- * roll card here. entry: { label, total, detail }.
+ * reporter: optional async (entry, rolls) => void. When given (Midi saves, native
+ * dnd5e rolls), each reroll is reported to it — for display on that mode's card —
+ * instead of being written to a roll card here. entry: { label, total, detail };
+ * rolls: { roll } — the new roll, for a caller that rewrites the card's roll.
  */
 async function promptNatOneSave(actor, rollTotal, dc, originalRoll, rollMsgId, rollMsgContent, showDC = true, reporter = null) {
   if (!game.user.isGM && actor.hasPlayerOwner && !actor.isOwner) return null;
@@ -83,7 +84,7 @@ async function promptNatOneSave(actor, rollTotal, dc, originalRoll, rollMsgId, r
         label:  sectionLabel === "Luck Dice" ? "Rerolled with 2 Luck Dice" : `Rerolled with ${sectionLabel}`,
         total:  Number(newRoll.total ?? 0),
         detail: `d20: ${getKeptD20Result(newRoll) ?? "?"}`
-      });
+      }, { roll: newRoll });
       return [rollMsgId, rollMsgContent];
     }
     const rerollHtml    = await newRoll.render();

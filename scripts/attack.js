@@ -20,7 +20,8 @@ const {
   promptChoice, promptSlider, buildFakeRoll, getKeptD20Result, spendDiceFromPools,
   evaluateReroll, buildDiceAvailableHTML, whisperLuckRegain, maybeRegainLuckDie,
   isLuckDiceEnabled, isInspirationEnabled, actorHasInspiration, consumeInspiration,
-  evaluateInspirationReroll,
+  evaluateInspirationReroll, combineRolls,
+  HISTORY_FLAG, diceFaces, renderLuckSection,
 } = LDA;
 
 // ── Hit state detection ───────────────────────────────────────────────────────
@@ -81,26 +82,6 @@ async function setAttackRoll(workflow, roll) {
   debug(`setAttackRoll: total=${roll.total} hits=${workflow.hitTargets?.size ?? 0}`);
 }
 
-/**
- * Build a combined Roll from baseRoll + bonusRoll by merging their RollTerms.
- * Using Roll.fromTerms means .total returns the correct value naturally.
- */
-async function buildCombinedRoll(baseRoll, bonusRoll) {
-  try {
-    const OperatorTerm = foundry.dice.terms?.OperatorTerm;
-    if (!OperatorTerm) throw new Error("foundry.dice.terms.OperatorTerm not found");
-    const plusTerm = new OperatorTerm({ operator: "+" });
-    plusTerm._evaluated = true;
-    const combined = Roll.fromTerms([...baseRoll.terms, plusTerm, ...bonusRoll.terms]);
-    debug(`buildCombinedRoll: total=${combined.total} (Roll.fromTerms)`);
-    return combined;
-  } catch (e) {
-    debug(`buildCombinedRoll: Roll.fromTerms failed (${e.message}), patching _total`);
-    baseRoll._total = (baseRoll._total ?? baseRoll.total) + bonusRoll.total;
-    return baseRoll;
-  }
-}
-
 /** The workflow's current attack total. */
 function attackTotalOf(workflow) {
   return Number(workflow.attackTotal ?? workflow.attackRoll?.total ?? 0);
@@ -122,7 +103,7 @@ async function addLuckDiceToAttack(workflow, diceCount) {
   const bonusRoll = await new Roll(`${diceCount}d6`).evaluate();
   if (game.dice3d) await game.dice3d.showForRoll(bonusRoll, game.user, true, null, false);
   const before   = attackTotalOf(workflow);
-  const combined = await buildCombinedRoll(workflow.attackRoll, bonusRoll);
+  const combined = combineRolls(workflow.attackRoll, bonusRoll);
   await setAttackRoll(workflow, combined);
   workflow.luckAttackBonus = (workflow.luckAttackBonus ?? 0) + bonusRoll.total;
   await recordAttackLuck(workflow, before, {
@@ -135,9 +116,9 @@ async function addLuckDiceToAttack(workflow, diceCount) {
 }
 
 /** Record a miss converted to a hit, so the damage prompt treats it as a hit. */
-function markIfConverted(workflow, state) {
-  if (getDefiniteHitState(workflow) === true) {
-    state.convertedMissToHit = true;
+function markIfConverted(attack) {
+  if (attack.hitState() === true) {
+    attack.state.convertedMissToHit = true;
     debug("attack: luck converted miss to hit");
   }
 }
@@ -156,15 +137,7 @@ function markIfConverted(workflow, state) {
 //   [{ uuid, name, start, entries: [{ kind: "save", label, total, detail }], verdict? }]
 // Entries without a total (luck damage) render as a plain line.
 
-const HISTORY_FLAG = "luckHistory";
 const SAVES_FLAG   = "luckSaves";
-const VERDICTS     = { hit: ["HIT", true], miss: ["MISS", false], passed: ["PASSED", true], failed: ["FAILED", false] };
-
-/** Active die faces of a roll, e.g. [4, 3] for 2d6. */
-function diceFaces(roll) {
-  return (roll?.dice ?? []).flatMap(d => (d.results ?? []).filter(r => r.active !== false).map(r => r.result));
-}
-
 /** Read-modify-write one of this module's flags on the workflow's card. */
 async function updateCardFlag(workflow, key, fallback, mutate) {
   const card = workflow?.chatCard;
@@ -219,41 +192,6 @@ async function finishSaveLuck(workflow, uuid, passed) {
   });
 }
 
-/** Rows for one history: superseded totals struck through, the current one bold. */
-function renderHistoryRows(history) {
-  const hasTotal = (e) => e.total !== undefined && e.total !== null;
-  const current  = history.entries.filter(hasTotal).at(-1);
-  const row = (label, value = "", { struck = false, strong = false } = {}) => `
-    <div style="display:flex;justify-content:space-between;align-items:baseline;gap:6px;margin:1px 0">
-      <span>${label}</span>
-      <span style="${struck ? "text-decoration:line-through;opacity:0.5;" : ""}${strong ? "font-weight:bold;font-size:1.15em;" : ""}">${value}</span>
-    </div>`;
-
-  const rows = [];
-  if (current && history.start !== null && history.start !== undefined) {
-    rows.push(row("Original roll", history.start, { struck: true }));
-  }
-  for (const e of history.entries) {
-    if (!hasTotal(e)) { rows.push(row(e.label)); continue; }
-    const detail = e.detail ? ` <span style="opacity:0.6;font-size:0.85em">(${e.detail})</span>` : "";
-    rows.push(row(`${e.label}${detail}`, e.total, { struck: e !== current, strong: e === current }));
-  }
-  const [verdict, good] = VERDICTS[history.verdict] ?? [];
-  if (verdict) rows.push(`<div style="text-align:right;font-weight:bold;color:${good ? "#719f50" : "#c0392b"}">${verdict}</div>`);
-  return rows.join("");
-}
-
-/** The bordered "Luck Dice" block, as a detached element. */
-function luckBlock(className, inner) {
-  const wrapper = document.createElement("div");
-  wrapper.innerHTML = `
-    <div class="${className}" style="margin:4px 0;padding:4px 6px;border:1px solid rgba(128,128,128,0.4);border-radius:4px">
-      <p style="text-align:center;font-size:10px;font-weight:bold;letter-spacing:0.15em;text-transform:uppercase;opacity:0.6;margin:0 0 2px">Luck Dice</p>
-      ${inner}
-    </div>`.trim();
-  return wrapper.firstElementChild;
-}
-
 /**
  * Insert the history blocks into a rendered Midi card. Anchors on Midi's section
  * wrappers (`midi-qol-hits-display`, `midi-qol-attack-roll`,
@@ -269,7 +207,7 @@ function injectLuckHistory(message, html) {
   // Midi shows the attack roll to the GM only, so it never reveals that roll.
   const history = message.getFlag?.(MODULE_ID, HISTORY_FLAG);
   if (history?.entries?.length && (game.user.isGM || !message.getFlag?.("midi-qol", "GMOnlyAttackRoll"))) {
-    const block  = luckBlock("lda-luck-history", renderHistoryRows(history));
+    const block  = renderLuckSection(history);
     const hits   = html.querySelector(".midi-qol-hits-display");
     const attack = html.querySelector(".midi-qol-attack-roll");
     if (hits) hits.before(block);
@@ -280,13 +218,10 @@ function injectLuckHistory(message, html) {
   // Save history, one titled history per target, directly under Midi's saves.
   const saves = (message.getFlag?.(MODULE_ID, SAVES_FLAG) ?? []).filter(s => s.entries?.length);
   if (saves.length) {
-    const escape = foundry.utils.escapeHTML ?? ((s) => String(s));
-    const block  = luckBlock("lda-luck-saves", saves.map(s => `
-      <div style="font-weight:bold;margin-top:2px">${escape(s.name ?? "")}</div>
-      ${renderHistoryRows(s)}`).join(""));
+    const blocks = saves.map(s => renderLuckSection(s, { className: "lda-luck-saves", title: `Luck Dice — ${s.name ?? ""}` }));
     const savesSection = html.querySelector(".midi-qol-saves-display");
-    if (savesSection) savesSection.after(block);
-    else fallback().append(block);
+    if (savesSection) savesSection.after(...blocks);
+    else fallback().append(...blocks);
   }
 }
 
@@ -341,20 +276,40 @@ function isCritDiceMaximized() {
 }
 
 // ── Attack prompts ────────────────────────────────────────────────────────────
+// promptLuckOnMiss / promptNatOne work on an "attack" adapter so Midi mode and
+// native dnd5e mode (native.js) share them:
+//   actor, state                       the attacker; per-attack prompt state
+//   total(), hitState()                current attack total; true / false / null
+//   reroll(evaluate, label), addDice(n) apply luck to the roll and record it
+//   finish()                           stamp the final HIT / MISS in the history
 
-async function promptLuckOnMiss(workflow) {
-  const actor = workflow?.actor;
+/** Attack adapter over a Midi workflow. */
+function midiAttack(workflow) {
+  return {
+    actor:    workflow?.actor,
+    state:    getState(workflow),
+    total:    () => attackTotalOf(workflow),
+    hitState: () => getDefiniteHitState(workflow),
+    reroll:   (evaluate, label) => rerollAttack(workflow, evaluate, label),
+    addDice:  (diceCount) => addLuckDiceToAttack(workflow, diceCount),
+    finish:   () => finishLuckHistory(workflow)
+  };
+}
+
+
+async function promptLuckOnMiss(attack) {
+  const actor = attack?.actor;
   if (!actor || (!game.user?.isGM && actor.hasPlayerOwner && !actor.isOwner)) return;
 
-  const state = getState(workflow);
+  const state = attack.state;
   if (state.attackPrompted) return;
 
   let diceAdded = false; // once true, reroll option is hidden
 
   try {
     while (true) {
-      const hitState = getDefiniteHitState(workflow);
-      console.log(`[${MODULE_ID}] promptLuckOnMiss loop: hitState=${hitState} total=${workflow.attackTotal ?? workflow.attackRoll?.total} hits=${workflow.hitTargets?.size ?? 0}`);
+      const hitState = attack.hitState();
+      console.log(`[${MODULE_ID}] promptLuckOnMiss loop: hitState=${hitState} total=${attack.total()}`);
       if (hitState !== false) return;
 
       const luckEnabled = isLuckDiceEnabled();
@@ -376,7 +331,7 @@ async function promptLuckOnMiss(workflow) {
 
       const action = await promptChoice(
         "Missed Attack",
-        `<p>Your attack missed with a <strong>${attackTotalOf(workflow)}</strong>. What would you like to do?</p>${luckEnabled ? buildDiceAvailableHTML(actor) : ""}`,
+        `<p>Your attack missed with a <strong>${attack.total()}</strong>. What would you like to do?</p>${luckEnabled ? buildDiceAvailableHTML(actor) : ""}`,
         options
       );
       console.log(`[${MODULE_ID}] promptLuckOnMiss: player chose "${action}"`);
@@ -384,8 +339,8 @@ async function promptLuckOnMiss(workflow) {
 
       if (action === "inspiration") {
         await consumeInspiration(actor);
-        await rerollAttack(workflow, evaluateInspirationReroll, "Rerolled with Inspiration");
-        markIfConverted(workflow, state);
+        await attack.reroll(evaluateInspirationReroll, "Rerolled with Inspiration");
+        markIfConverted(attack);
         // Inspiration and Luck Dice are mutually exclusive — stop here regardless of hit state.
         return;
       }
@@ -394,8 +349,8 @@ async function promptLuckOnMiss(workflow) {
         const spent = await spendDiceFromPools(actor, 2);
         if (spent < 2) { debug("promptLuckOnMiss: could not spend 2 dice for reroll"); return; }
         state.luckSpentOnAttack += 2;
-        await rerollAttack(workflow, evaluateReroll, "Rerolled with 2 Luck Dice");
-        markIfConverted(workflow, state);
+        await attack.reroll(evaluateReroll, "Rerolled with 2 Luck Dice");
+        markIfConverted(attack);
       }
 
       if (action === "add") {
@@ -410,12 +365,12 @@ async function promptLuckOnMiss(workflow) {
         if (spent < 1) { debug("promptLuckOnMiss: could not spend dice for add"); return; }
         diceAdded = true;
         state.luckSpentOnAttack += diceCount;
-        await addLuckDiceToAttack(workflow, diceCount);
-        markIfConverted(workflow, state);
+        await attack.addDice(diceCount);
+        markIfConverted(attack);
       }
     }
   } finally {
-    await finishLuckHistory(workflow);
+    await attack.finish();
   }
 }
 
@@ -478,11 +433,11 @@ async function promptLuckOnDamage(workflow) {
   });
 }
 
-async function promptNatOne(workflow) {
-  const actor = workflow?.actor;
+async function promptNatOne(attack) {
+  const actor = attack?.actor;
   if (!actor || (!game.user?.isGM && actor.hasPlayerOwner && !actor.isOwner)) return;
 
-  const state       = getState(workflow);
+  const state       = attack.state;
   const luckEnabled = isLuckDiceEnabled();
   const luckAvail   = luckEnabled ? getDiceUses(actor, LUCK_DICE_ITEM_NAME)   : 0;
   const impactAvail = luckEnabled ? getDiceUses(actor, IMPACT_DICE_ITEM_NAME) : 0;
@@ -514,10 +469,10 @@ async function promptNatOne(workflow) {
 
   if (action === "inspiration") {
     await consumeInspiration(actor);
-    await rerollAttack(workflow, evaluateInspirationReroll, "Rerolled with Inspiration");
-    markIfConverted(workflow, state);
+    await attack.reroll(evaluateInspirationReroll, "Rerolled with Inspiration");
+    markIfConverted(attack);
     // Inspiration and Luck Dice are mutually exclusive — stop here regardless of hit state.
-    await finishLuckHistory(workflow);
+    await attack.finish();
     return;
   }
 
@@ -525,11 +480,11 @@ async function promptNatOne(workflow) {
     const spent = await spendDiceFromPools(actor, 2);
     if (spent < 2) { debug("promptNatOne: could not spend 2 dice"); return; }
     state.luckSpentOnAttack += 2;
-    await rerollAttack(workflow, evaluateReroll, "Rerolled with 2 Luck Dice");
-    markIfConverted(workflow, state);
+    await attack.reroll(evaluateReroll, "Rerolled with 2 Luck Dice");
+    markIfConverted(attack);
     // Still missing — continue in the miss prompt, which adds to the same history.
-    if (getDefiniteHitState(workflow) === false) return promptLuckOnMiss(workflow);
-    await finishLuckHistory(workflow);
+    if (attack.hitState() === false) return promptLuckOnMiss(attack);
+    await attack.finish();
     return;
   }
 
@@ -655,10 +610,8 @@ function applyLuckySavePass(workflow, { uuid, details, tokenDoc, token, newTotal
 
 Hooks.once("ready", () => {
   console.log(`[${MODULE_ID}] attack.js ready — midi-qol active=${game.modules.get("midi-qol")?.active ?? false}`);
-  if (!game.modules.get("midi-qol")?.active) {
-    ui.notifications?.warn("Scorpious187's Luck Dice Automation requires Midi-QoL.");
-    return;
-  }
+  // Without Midi, native.js handles rolls through dnd5e's own hooks instead.
+  if (!game.modules.get("midi-qol")?.active) return;
 
   // ── Luck Dice history on Midi's card ───────────────────────────────────────
   // Both hooks run the same idempotent injection; whichever fires last wins.
@@ -690,8 +643,8 @@ Hooks.once("ready", () => {
       );
       if (hitState !== false) return;
 
-      if (d20Result === 1) await promptNatOne(workflow);
-      else await promptLuckOnMiss(workflow);
+      if (d20Result === 1) await promptNatOne(midiAttack(workflow));
+      else await promptLuckOnMiss(midiAttack(workflow));
     } catch (err) {
       console.error(`[${MODULE_ID}] hitsChecked error:`, err);
     }
@@ -901,5 +854,5 @@ Hooks.once("ready", () => {
   console.log(`[${MODULE_ID}] attack.js initialized.`);
 });
 
-Object.assign(LDA, { runMidiSavePrompt });
+Object.assign(LDA, { runMidiSavePrompt, promptLuckOnMiss, promptNatOne });
 })();
