@@ -12,7 +12,7 @@ const {
   promptChoice, promptSlider, getKeptD20Result, spendDiceFromPools,
   evaluateReroll, buildDiceAvailableHTML, whisperLuckRegain,
   isLuckDiceEnabled, isInspirationEnabled, actorHasInspiration, consumeInspiration,
-  evaluateInspirationReroll,
+  evaluateInspirationReroll, finishCardHistory, cardReporter,
   runMidiSavePrompt,  // exported by attack.js, which loads before us
 } = LDA;
 
@@ -408,8 +408,9 @@ async function rollSkillForCheck(actor, checkValue, dc, showDC = false, gmCardId
     return;
   }
 
-  // Find the chat message the roll just created.
-  const rollMsg        = game.messages.contents.filter(m => !knownMsgIds.has(m.id)).at(-1);
+  // The roll's chat card: dnd5e links each roll to its card (roll.parent); fall
+  // back to the newest message the roll created.
+  const rollMsg        = roll.parent ?? game.messages.contents.filter(m => !knownMsgIds.has(m.id)).at(-1);
   const rollMsgId      = rollMsg?.id      ?? null;
   const rollMsgContent = rollMsg?.content ?? "";
 
@@ -417,9 +418,15 @@ async function rollSkillForCheck(actor, checkValue, dc, showDC = false, gmCardId
   const passed = total >= dc;
   console.log(`[${MODULE_ID}] rollSkillForCheck: ${actor.name} rolled ${total} vs DC ${dc} → ${passed ? "PASS" : "FAIL"}`);
 
+  // The roll carries no DC (so the DC stays hidden unless the GM showed it), so
+  // dnd5e can't mark the card a success or failure. Instead each Luck Dice step
+  // rewrites the card's roll and the card states the verdict itself, so the
+  // player sees their rolls and the result on their own card.
   if (passed) {
+    if (rollMsg) await finishCardHistory(rollMsg, "passed", { always: true });
     await reportCheckResult(actor, total, true, gmCardId, rollMsgId);
   } else {
+    const reporter  = rollMsg ? cardReporter(rollMsg, roll) : null;
     const isSave    = type === "save";
     const d20Result = isSave ? getKeptD20Result(roll) : null;
     const isNatOne  = d20Result === 1;
@@ -428,15 +435,16 @@ async function rollSkillForCheck(actor, checkValue, dc, showDC = false, gmCardId
     if (isSave && isNatOne) {
       // Saves get a restricted nat-1 dialog (reroll or gain luck die — no add-dice).
       // promptNatOneSave is in saving-throw.js which loads after us — use LDA for late binding.
-      result = await LDA.promptNatOneSave(actor, total, dc, roll, rollMsgId, rollMsgContent, showDC);
+      result = await LDA.promptNatOneSave(actor, total, dc, roll, rollMsgId, rollMsgContent, showDC, reporter);
     } else {
       result = await promptLuckOnCheckFail(
         actor, total, dc, rollMsgId, rollMsgContent, roll,
         isSave ? "Failed Saving Throw" : "Failed Skill Check",
         isSave ? "saving throw"         : "skill check",
-        showDC
+        showDC, reporter
       );
     }
+    if (rollMsg) await finishCardHistory(rollMsg, result?.passed ? "passed" : "failed", { always: true });
     if (result) await reportCheckResult(actor, result.finalTotal, result.passed, gmCardId, rollMsgId);
   }
 }

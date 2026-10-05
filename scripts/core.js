@@ -377,6 +377,16 @@ function getAttackAutomation() {
   try { return game.settings.get(MODULE_ID, "attackAutomation"); } catch { return "off"; }
 }
 
+/** Native mode save automation: "off" | "request" | "npc" | "full". */
+function getSaveAutomation() {
+  try { return game.settings.get(MODULE_ID, "saveAutomation"); } catch { return "off"; }
+}
+
+/** Native mode, the GM's private rolls: "outcome" | "share" | "private". */
+function getPrivateRollOutcome() {
+  try { return game.settings.get(MODULE_ID, "privateRollOutcome"); } catch { return "outcome"; }
+}
+
 function isInspirationEnabled() {
   try { return game.settings.get(MODULE_ID, "enableInspiration"); } catch { return false; }
 }
@@ -440,7 +450,10 @@ function stepIcon(label = "") {
  * Laid out with inline flex so it also renders inside Midi's card, which
  * doesn't carry dnd5e's icon-row styles. Returns a detached element.
  */
-function renderLuckSection(history, { className = "lda-luck-history", title = "Luck Dice" } = {}) {
+function renderLuckSection(history, {
+  className = "lda-luck-history",
+  title = history.entries?.length ? "Luck Dice" : "Result"
+} = {}) {
   const escape   = foundry.utils.escapeHTML ?? ((s) => String(s));
   const hasTotal = (e) => e.total !== undefined && e.total !== null;
   const steps    = history.entries.filter(hasTotal);
@@ -456,7 +469,7 @@ function renderLuckSection(history, { className = "lda-luck-history", title = "L
   const wrapper = document.createElement("div");
   wrapper.innerHTML = `
     <section class="icon-row ${className}" style="display:flex;align-items:flex-start;gap:6px;margin:2px 0">
-      <i class="fa-fw fa-solid fa-clover" aria-label="Luck Dice" style="margin-top:2px;opacity:0.8"></i>
+      <i class="fa-fw fa-solid ${history.entries?.length ? "fa-clover" : "fa-dice-d20"}" aria-label="${escape(title)}" style="margin-top:2px;opacity:0.8"></i>
       <div style="flex:1;min-width:0">
         <div style="display:flex;justify-content:space-between;align-items:baseline;gap:6px">
           <strong>${escape(title)}</strong>
@@ -467,6 +480,60 @@ function renderLuckSection(history, { className = "lda-luck-history", title = "L
       </div>
     </section>`.trim();
   return wrapper.firstElementChild;
+}
+
+// ── Luck history on dnd5e roll cards (native rolls, roll-request window) ─────
+// Each luck step rewrites the card's first roll, so dnd5e redraws the total (and
+// success / failure when the roll has a DC); the history and verdict go in this
+// module's flag on the card and are shown under the roll (native.js renders it).
+
+/** A writable copy of a card's luck history. */
+function readCardHistory(message) {
+  return foundry.utils.deepClone(message.getFlag(MODULE_ID, HISTORY_FLAG) ?? { start: null, entries: [] });
+}
+
+/** Rewrite a card's rolls and/or luck history in one update, so it re-renders once. */
+async function updateRollCard(message, { rolls, history } = {}) {
+  const update = {};
+  if (rolls)   update.rolls = rolls;
+  if (history) update[`flags.${MODULE_ID}.${HISTORY_FLAG}`] = history;
+  await message.update(update);
+}
+
+/** Replace the card's first roll (the d20) and add one history entry. */
+async function recordCardStep(message, roll, start, entry) {
+  const history = readCardHistory(message);
+  history.start ??= start;
+  history.entries.push(entry);
+  delete history.verdict;
+  await updateRollCard(message, { rolls: [roll, ...message.rolls.slice(1)], history });
+}
+
+/**
+ * Stamp the verdict on a card's history. Skipped when no luck was spent, unless
+ * `always` — the roll-request window, whose rolls carry no DC for dnd5e to judge
+ * (so the DC stays hidden), states pass / fail itself.
+ */
+async function finishCardHistory(message, verdict, { always = false } = {}) {
+  if (!always && !message.getFlag(MODULE_ID, HISTORY_FLAG)?.entries?.length) return;
+  const history = readCardHistory(message);
+  history.verdict = verdict;
+  await updateRollCard(message, { history });
+}
+
+/**
+ * A reporter for the shared luck prompts (promptLuckOnCheckFail /
+ * promptNatOneSave) that writes to a dnd5e roll card: a reroll replaces the
+ * card's roll; added dice are merged into it.
+ */
+function cardReporter(message, originalRoll, kind = "check") {
+  let current = originalRoll;
+  const start = Number(originalRoll?.total ?? 0);
+  return async (entry, { roll, bonusRoll } = {}) => {
+    if (roll) current = roll;
+    else if (bonusRoll) current = combineRolls(current, bonusRoll);
+    await recordCardStep(message, current, start, { kind, ...entry });
+  };
 }
 
 // Actors whose d20 roll is in progress through the roll-request window. That
@@ -544,6 +611,43 @@ Hooks.once("init", () => {
     default: "off"
   });
 
+  game.settings.register(MODULE_ID, "saveAutomation", {
+    name: "Save Automation (without Midi-QoL)",
+    hint: "When a save activity (e.g. Fireball) is used on targets. " +
+          "Request: every target is asked to save — players get a prompt, the GM one prompt for NPCs. " +
+          "Auto-roll NPC saves: the GM's client rolls NPC saves; players roll from the card as usual. " +
+          "Full: NPC saves are rolled, players are prompted (with Luck Dice on a failure), then damage is " +
+          "rolled and applied to each target — full on a failure, per the activity's on-save rule on a success. " +
+          "Ignored when Midi-QoL is active.",
+    scope: "world",
+    config: true,
+    type: String,
+    choices: {
+      off:     "Off",
+      request: "Request saves",
+      npc:     "Auto-roll NPC saves",
+      full:    "Full: saves, then roll and apply damage"
+    },
+    default: "off"
+  });
+
+  game.settings.register(MODULE_ID, "privateRollOutcome", {
+    name: "Players See the GM's Private Rolls (without Midi-QoL)",
+    hint: "When the GM rolls privately and the roll affects player characters (an NPC attacks a PC, an NPC's spell hits PCs). " +
+          "Outcome card: a public card with just the outcome for those characters — hit or miss, saved or failed, damage taken — " +
+          "never the NPC's totals, bonuses or DCs. Share: the GM's private attack and damage cards are also shown to the players " +
+          "whose characters they target. Keep private: players see none of the GM's private rolls. Ignored when Midi-QoL is active.",
+    scope: "world",
+    config: true,
+    type: String,
+    choices: {
+      outcome: "Outcome card",
+      share:   "Share full cards with targeted players",
+      private: "Keep private"
+    },
+    default: "outcome"
+  });
+
   game.settings.register(MODULE_ID, "debug", {
     name: "Debug Logging",
     hint: "Print detailed Scorpious187's Luck Dice Automation messages to the browser console. " +
@@ -568,8 +672,9 @@ return {
   buildFakeRoll, getKeptD20Result,
   spendDiceFromPools, evaluateReroll, combineRolls, buildDiceAvailableHTML,
   whisperLuckRegain, maybeRegainLuckDie,
-  isLuckDiceEnabled, isInspirationEnabled, getAttackAutomation,
+  isLuckDiceEnabled, isInspirationEnabled, getAttackAutomation, getSaveAutomation, getPrivateRollOutcome,
   actorHasInspiration, consumeInspiration, evaluateInspirationReroll,
   HISTORY_FLAG, diceFaces, renderLuckSection, requestRollActors,
+  readCardHistory, updateRollCard, recordCardStep, finishCardHistory, cardReporter,
 };
 })();

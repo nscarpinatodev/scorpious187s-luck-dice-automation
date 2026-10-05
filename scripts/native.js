@@ -20,7 +20,8 @@ const {
   getDiceUses, actorHasLuckDice, promptChoice, promptSlider, getKeptD20Result, spendDiceFromPools,
   buildDiceAvailableHTML, isLuckDiceEnabled, isInspirationEnabled, actorHasInspiration,
   combineRolls, HISTORY_FLAG, diceFaces, renderLuckSection, requestRollActors,
-  getAttackAutomation,
+  getAttackAutomation, getSaveAutomation, getPrivateRollOutcome,
+  readCardHistory, updateRollCard, recordCardStep, finishCardHistory, cardReporter,
 } = LDA;
 
 const APPLIED_FLAG = "appliedDamage";
@@ -34,38 +35,6 @@ function canUseLuck(actor) {
     (isLuckDiceEnabled() && actorHasLuckDice(actor)) ||
     (isInspirationEnabled() && actorHasInspiration(actor))
   );
-}
-
-// ── Card updates ──────────────────────────────────────────────────────────────
-
-/** A writable copy of the card's luck history. */
-function readHistory(message) {
-  return foundry.utils.deepClone(message.getFlag(MODULE_ID, HISTORY_FLAG) ?? { start: null, entries: [] });
-}
-
-/** Rewrite the card's rolls and/or luck history in one update, so it re-renders once. */
-async function updateCard(message, { rolls, history } = {}) {
-  const update = {};
-  if (rolls)   update.rolls = rolls;
-  if (history) update[`flags.${MODULE_ID}.${HISTORY_FLAG}`] = history;
-  await message.update(update);
-}
-
-/** Replace the card's first roll (the d20) and add one history entry. */
-async function recordD20Step(message, roll, start, entry) {
-  const history = readHistory(message);
-  history.start ??= start;
-  history.entries.push(entry);
-  delete history.verdict;
-  await updateCard(message, { rolls: [roll, ...message.rolls.slice(1)], history });
-}
-
-/** Stamp the final verdict, if any luck was spent on this card. */
-async function finishHistory(message, verdict) {
-  if (!message.getFlag(MODULE_ID, HISTORY_FLAG)?.entries?.length) return;
-  const history = readHistory(message);
-  history.verdict = verdict;
-  await updateCard(message, { history });
 }
 
 // ── Attacks ───────────────────────────────────────────────────────────────────
@@ -92,7 +61,7 @@ function nativeAttack(message, actor) {
     async reroll(evaluate, label) {
       const before = this.total();
       const roll   = await evaluate(current());
-      await recordD20Step(message, roll, before, {
+      await recordCardStep(message, roll, before, {
         kind: "attack", label, total: roll.total, detail: `d20: ${getKeptD20Result(roll) ?? "?"}`
       });
       return roll;
@@ -102,13 +71,13 @@ function nativeAttack(message, actor) {
       if (game.dice3d) await game.dice3d.showForRoll(bonus, game.user, true, null, false);
       const before = this.total();
       const roll   = combineRolls(current(), bonus);
-      await recordD20Step(message, roll, before, {
+      await recordCardStep(message, roll, before, {
         kind: "attack", label: `Added ${diceCount}d6 Luck Dice`, total: roll.total,
         detail: `${diceFaces(bonus).join(", ")} = +${bonus.total}`
       });
       return bonus;
     },
-    finish: () => finishHistory(message, attackHitState(message) === true ? "hit" : "miss")
+    finish: () => finishCardHistory(message, attackHitState(message) === true ? "hit" : "miss")
   };
 }
 
@@ -135,9 +104,42 @@ async function onAttackRolled(rolls, data) {
       }
     }
 
+    await syncAutomatedAnimations(message, activity);
+    await handlePrivateAttack(message, activity);
     await automateAttack(message, activity);
   } catch (err) {
     console.error(`[${MODULE_ID}] native attack error:`, err);
+  }
+}
+
+/**
+ * Automated Animations (without Midi) judges an attack from its original roll —
+ * total vs the AC dnd5e sets only when exactly one token is targeted — and keeps
+ * that result on the actor (actor.hits[activity.relativeID]) for its damage-roll
+ * animation ("Play animation on damage roll"). Bring it in line with the card's
+ * actual result, so a miss Luck Dice turned into a hit animates as a hit, and so
+ * do natural 20s / 1s and attacks on several targets (any hit counts, like AA's
+ * single result). Only runs before the damage is rolled; can't undo an animation
+ * AA already played at attack time.
+ *
+ * AA's cache is internal, not an API: this only rewrites an entry AA itself made
+ * for this activity, and never throws.
+ */
+async function syncAutomatedAnimations(message, activity) {
+  try {
+    if (!game.modules.get("autoanimations")?.active) return;
+    // Let AA's own rollAttackV2 handler record its result first: hook listeners
+    // run in turn, and AA records it before its first await.
+    await Promise.resolve();
+    const hits = activity?.actor?.hits;
+    const id   = activity?.relativeID;
+    if (!hits || !id || !(id in hits)) return;
+    const hit = attackHitState(message);
+    if (hit === null || hits[id] === hit) return;
+    hits[id] = hit;
+    debug(`Automated Animations: ${activity.actor.name}'s ${activity.item?.name ?? activity.name} → ${hit ? "hit" : "miss"} (from the card)`);
+  } catch (err) {
+    debug("Automated Animations sync skipped:", err);
   }
 }
 
@@ -212,10 +214,10 @@ async function onDamageRolled(rolls, data) {
     await bonus.evaluate();
     if (game.dice3d) await game.dice3d.showForRoll(bonus, game.user, true, null, false);
 
-    const history = readHistory(message);
+    const history = readCardHistory(message);
     history.entries.push({ kind: "damage", label: `+${diceCount}d6 Luck Dice to damage${isCrit ? " (critical)" : ""}` });
     // The damage tray totals every DamageRoll on the card, so it applies these too.
-    await updateCard(message, { rolls: [...message.rolls, bonus], history });
+    await updateRollCard(message, { rolls: [...message.rolls, bonus], history });
     console.log(`[${MODULE_ID}] native damage: ${actor.name} added ${diceCount}d6 = ${bonus.total}${isCrit ? " (critical)" : ""}`);
   } catch (err) {
     console.error(`[${MODULE_ID}] native damage error:`, err);
@@ -281,7 +283,7 @@ async function automateAttack(attackMessage, activity) {
 async function requestApplyDamage(damageMessage, targets) {
   const payload = {
     messageId: damageMessage.id,
-    targets:   targets.map(({ actor, token, name }) => ({ actor, token, name }))
+    targets:   targets.map(({ actor, token, name, multiplier, saved }) => ({ actor, token, name, multiplier, saved }))
   };
   if (game.user.isGM) return applyCardDamage(payload);
 
@@ -296,7 +298,8 @@ async function requestApplyDamage(damageMessage, targets) {
 /**
  * GM side: apply every DamageRoll on the card to each target, aggregated the way
  * dnd5e's own chat damage application does it, and note what was applied on the
- * card.
+ * card. A target's optional multiplier scales its damage (a successful save:
+ * ½ or 0 per the activity's on-save rule); `saved` marks it on the card.
  */
 async function applyCardDamage({ messageId, targets }) {
   const message   = game.messages.get(messageId);
@@ -318,20 +321,460 @@ async function applyCardDamage({ messageId, targets }) {
   for (const target of targets ?? []) {
     const actor = (await fromUuid(target.token))?.actor ?? await fromUuid(target.actor);
     if (!actor?.applyDamage) continue;
-    const amount = Number(actor.calculateDamage?.(damages, {})?.amount ?? 0);
-    await actor.applyDamage(damages, { isDelta: true, originatingMessage: message });
-    applied.push({ name: target.name ?? actor.name, amount });
+    const multiplier = Number.isFinite(target.multiplier) ? target.multiplier : 1;
+    const amount = Number(actor.calculateDamage?.(damages, { multiplier })?.amount ?? 0);
+    await actor.applyDamage(damages, { multiplier, isDelta: true, originatingMessage: message });
+    applied.push({ token: target.token, name: target.name ?? actor.name, amount, saved: !!target.saved });
   }
   if (applied.length) await message.setFlag(MODULE_ID, APPLIED_FLAG, applied);
+
+  // The GM's private damage card: players learn what happened to their characters.
+  if (isPrivateGMCard(message) && getPrivateRollOutcome() === "outcome") {
+    const byToken = new Map((targets ?? []).map(t => [t.token, t]));
+    const rows = playerTargets(targets).map(t => {
+      const entry = applied.find(a => a.token === t.token);
+      const saved = byToken.get(t.token)?.saved;
+      return { token: t.token, name: t.name, damage: entry?.amount, ...(typeof saved === "boolean" ? { saved } : {}) };
+    }).filter(r => Number.isFinite(r.damage));
+    const activity = message.getAssociatedActivity?.();
+    await recordOutcome(useKey(message), { actor: activity?.actor ?? message.speakerActor, title: outcomeTitle(activity, message) }, rows);
+  }
   console.log(`[${MODULE_ID}] applyCardDamage: ${applied.map(a => `${a.name} ${a.amount}`).join(", ") || "no targets"}`);
+}
+
+// ── The GM's private rolls ────────────────────────────────────────────────────
+// The "privateRollOutcome" setting, for GM rolls made privately (whispered or
+// blind) that affect player characters:
+//   outcome: one public card per use with just the outcome for those characters
+//            — hit / miss, saved / failed, damage taken — added to as the use
+//            resolves; never the NPC's totals, bonuses or DCs;
+//   share:   the GM's attack and damage cards are also whispered to the owners
+//            of the player characters they target;
+//   private: nothing.
+
+const OUTCOME_FLAG = "outcome";
+// Outcome cards this GM client created, by use (the usage card's id).
+const outcomeCards = new Map();
+
+/** A GM's card that players can't see (whispered or blind). */
+function isPrivateGMCard(message) {
+  return !!message?.author?.isGM && ((message.whisper?.length ?? 0) > 0 || !!message.blind);
+}
+
+/** The use a card belongs to: its usage card (every activity roll links to it). */
+function useKey(message) {
+  return message.rolls?.[0]?.options?.originatingMessage ?? message.id;
+}
+
+/** Card target descriptors whose actors belong to players, with those players' ids. */
+function playerTargets(descriptors) {
+  return (descriptors ?? []).map(t => {
+    let actor = null;
+    try { actor = fromUuidSync(t.token)?.actor ?? fromUuidSync(t.actor); } catch {}
+    const owners = game.users.filter(u => !u.isGM && actor?.testUserPermission(u, "OWNER")).map(u => u.id);
+    return owners.length ? { ...t, owners } : null;
+  }).filter(Boolean);
+}
+
+/** Share mode: also whisper a private GM card to the owners of the player characters it targets. */
+async function shareWithTargets(message, descriptors) {
+  const owners = playerTargets(descriptors).flatMap(t => t.owners);
+  const whisper = [...new Set([...(message.whisper ?? []), ...owners])];
+  if (whisper.length === (message.whisper?.length ?? 0) && !message.blind) return;
+  await message.update({ whisper, blind: false });
+}
+
+/** Outcome card markup: one line per player character. */
+function renderOutcome({ title, rows }) {
+  const result = (r) => [
+    r.hit === true    ? `<strong style="color:#719f50">HIT</strong>` : "",
+    r.hit === false   ? `<strong style="color:#c0392b">MISS</strong>` : "",
+    r.saved === true  ? `<strong style="color:#719f50">saved</strong>` : "",
+    r.saved === false ? `<strong style="color:#c0392b">failed</strong>` : "",
+    Number.isFinite(r.damage) ? (r.damage < 0 ? `healed ${-r.damage}` : `${r.damage} damage`) : ""
+  ].filter(Boolean).join(" · ");
+  return `
+    <div class="lda-outcome">
+      <p style="margin:0 0 4px"><strong>${escapeHTML(title)}</strong></p>
+      ${rows.map(r => `
+        <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px">
+          <span>${escapeHTML(r.name)}</span><span>${result(r)}</span>
+        </div>`).join("")}
+    </div>`;
+}
+
+/**
+ * Outcome mode: add or update player characters' rows on the public outcome
+ * card for a use, creating it the first time. rows: [{ token, name, hit?,
+ * saved?, damage? }]. Created without a message mode, so it's public however
+ * the GM's own rolls are set.
+ */
+async function recordOutcome(key, { actor, title }, rows) {
+  if (!rows.length) return;
+  const existing = game.messages.get(outcomeCards.get(key));
+  const data = foundry.utils.deepClone(existing?.getFlag(MODULE_ID, OUTCOME_FLAG) ?? { title, rows: [] });
+  for (const row of rows) {
+    const current = data.rows.find(r => r.token === row.token);
+    if (current) Object.assign(current, row);
+    else data.rows.push(row);
+  }
+  const content = renderOutcome(data);
+  if (existing) {
+    await existing.update({ content, [`flags.${MODULE_ID}.${OUTCOME_FLAG}`]: data });
+    return;
+  }
+  const created = await ChatMessage.create({
+    content,
+    speaker: ChatMessage.getSpeaker({ actor }),
+    flags:   { [MODULE_ID]: { [OUTCOME_FLAG]: data } }
+  });
+  if (created) outcomeCards.set(key, created.id);
+}
+
+/** "Goblin — Scimitar" for an activity's outcome card. */
+function outcomeTitle(activity, message) {
+  const actorName = activity?.actor?.name ?? message?.speaker?.alias ?? "";
+  const itemName  = activity?.item?.name ?? activity?.name ?? "";
+  return [actorName, itemName].filter(Boolean).join(" — ");
+}
+
+/** A GM's private attack card: outcome rows (hit / miss) or sharing, per the setting. */
+async function handlePrivateAttack(message, activity) {
+  if (!isPrivateGMCard(message)) return;
+  const mode = getPrivateRollOutcome();
+  if (mode === "share") return shareWithTargets(message, message.system?.targets);
+  if (mode !== "outcome") return;
+  const rows = playerTargets(message.system?.evaluatedTargets).map(t => ({ token: t.token, name: t.name, hit: !t.isMiss }));
+  await recordOutcome(useKey(message), { actor: activity?.actor, title: outcomeTitle(activity, message) }, rows);
+}
+
+// ── Save automation ───────────────────────────────────────────────────────────
+// The "saveAutomation" setting, for save activities (e.g. Fireball) used on targets:
+//   request: every target is asked to save — players by a prompt, the GM by one
+//            prompt for its batch; nothing waits on the results.
+//   npc:     the GM's client rolls the saves it handles; players roll from the
+//            card as usual.
+//   full:    the GM rolls its saves and players are prompted (Luck Dice on a
+//            failure); once every save is in, damage is rolled once and applied
+//            per target — full on a failure, per the on-save rule on a success.
+// Orchestrated on the caster's client. The usage card stores no targets, so the
+// caster's targets at the moment of use go with each request. Saves are rolled
+// exactly as dnd5e's save button rolls them: the activity's save bonus, and the
+// card linked to the usage card via system.origin so dnd5e's summary lists it.
+// Who rolls: a target's active player owner; otherwise (NPCs, offline players)
+// the primary GM.
+
+const SAVE_RESPONSE_TIMEOUT = 180_000;
+
+// Luck Dice prompts on d20 cards still in progress, by card id.
+const pendingLuckChecks = new Map();
+// Save requests this (the caster's) client is waiting on, by request id.
+const pendingSaveRequests = new Map();
+
+/** Track an in-progress Luck Dice prompt for a card, so automation can wait for it. */
+function trackPending(map, id, promise) {
+  if (!id) return;
+  map.set(id, promise);
+  promise.finally(() => { if (map.get(id) === promise) map.delete(id); });
+}
+
+function getPrimaryGM() {
+  return game.modules.get("scorpious187s-lib")?.api?.utils?.primaryGM?.() ?? null;
+}
+
+/** The active, non-GM owner of an actor, if any. */
+function activePlayerOwner(actor) {
+  return game.users.find(u => !u.isGM && u.active && actor?.testUserPermission(u, "OWNER")) ?? null;
+}
+
+function abilityLabel(ability) {
+  return game.i18n.localize(CONFIG.DND5E.abilities[ability]?.label ?? ability);
+}
+
+/** Resolve a target descriptor ({ actor, token }) to its token document and actor. */
+async function resolveTarget(target) {
+  const tokenDoc = target.token ? await fromUuid(target.token) : null;
+  const actor    = tokenDoc?.actor ?? (target.actor ? await fromUuid(target.actor) : null);
+  return { tokenDoc, actor };
+}
+
+/** A batch's results when it couldn't be rolled. */
+const noResults = (targets) => targets.map(t => ({ token: t.token, result: null }));
+
+/**
+ * Roll one target's save the way dnd5e's save button does, then wait for any
+ * Luck Dice spent on it. Returns { passed, total }, or null if it wasn't rolled.
+ *
+ * `link` ties the save card to the usage card (system.origin), as dnd5e's button
+ * does. With dnd5e's "summarize chat" setting a linked save card is hidden and
+ * shown only as a summary inside the usage card — under that card's visibility,
+ * and without the Luck history. So only GM-rolled saves are linked; a player's
+ * own save stays a normal card, where they see their roll, any Luck Dice spent,
+ * and the result.
+ */
+async function rollAutomatedSave(target, { activityUuid, usageId, ability, dc, fastForward, link }) {
+  const { tokenDoc, actor } = await resolveTarget(target);
+  if (!actor?.rollSavingThrow) return null;
+  const activity = activityUuid ? await fromUuid(activityUuid) : null;
+
+  const rollData = { ability, target: dc };
+  if (activity?.save?.bonus) {
+    const bonus     = CONFIG.Dice.BasicRoll.replaceFormulaData(activity.save.bonus, activity.getRollData(), { missing: 0 });
+    const bonusData = CONFIG.Dice.BasicRoll.constructParts({ activityBonus: bonus });
+    if (bonusData.parts.length) rollData.rolls = [bonusData];
+  }
+  const speaker = ChatMessage.getSpeaker({ actor, scene: tokenDoc?.parent ?? canvas.scene, token: tokenDoc });
+  const rolls = await actor.rollSavingThrow(rollData, fastForward ? { configure: false } : {}, {
+    data: { speaker, system: { ...(activity?.messageSources ?? {}), ...(link ? { origin: usageId } : {}) } }
+  });
+  const message = rolls?.[0]?.parent;
+  if (!message) return null;
+
+  await pendingLuckChecks.get(message.id);
+  const final = message.rolls[0];
+  return { passed: !!final?.isSuccess, total: Number(final?.total ?? 0) };
+}
+
+/**
+ * GM side: roll the saves for the targets the GM handles (NPCs, offline
+ * players). With `prompt` (request mode), asks once for the whole batch first.
+ */
+async function rollGMSaves(request) {
+  const { targets } = request;
+  if (request.prompt) {
+    const choice = await promptChoice(
+      "Saving Throws",
+      `<p><strong>${escapeHTML(request.activityName)}</strong>${request.casterName ? ` (${escapeHTML(request.casterName)})` : ""}:
+       roll <strong>${escapeHTML(abilityLabel(request.ability))}</strong> saves (DC ${request.dc}) for
+       <strong>${escapeHTML(targets.map(t => t.name).join(", "))}</strong>?</p>`,
+      [{ action: "roll", label: "Roll Saves" }, { action: "skip", label: "Skip" }]
+    );
+    if (choice !== "roll") return noResults(targets);
+  }
+  const results = [];
+  for (const target of targets) {
+    try {
+      results.push({ token: target.token, result: await rollAutomatedSave(target, { ...request, fastForward: true, link: true }) });
+    } catch (err) {
+      console.error(`[${MODULE_ID}] rollGMSaves: ${target.name}:`, err);
+      results.push({ token: target.token, result: null });
+    }
+  }
+  return results;
+}
+
+/** Player side: prompt for this player's target, then roll with dnd5e's dialog. */
+async function rollPlayerSave(request) {
+  const [target] = request.targets;
+  const choice = await promptChoice(
+    "Saving Throw",
+    `<p><strong>${escapeHTML(request.activityName)}</strong>${request.casterName ? ` from ${escapeHTML(request.casterName)}` : ""}:
+     <strong>${escapeHTML(target.name)}</strong> must make a <strong>${escapeHTML(abilityLabel(request.ability))}</strong>
+     saving throw (DC ${request.dc}).</p>`,
+    [{ action: "roll", label: "Roll Save" }, { action: "dismiss", label: "Dismiss" }]
+  );
+  if (choice !== "roll") return noResults(request.targets);
+  return [{ token: target.token, result: await rollAutomatedSave(target, { ...request, fastForward: false, link: false }) }];
+}
+
+/**
+ * Have a batch of saves rolled by `rollerId` (a player's id, or null for the
+ * primary GM) and resolve with [{ token, result }]. Rolls locally when this
+ * client is the roller; otherwise asks over the socket and waits, giving up
+ * (null results) after SAVE_RESPONSE_TIMEOUT.
+ */
+function requestSaves(rollerId, request) {
+  if (rollerId === null ? game.user.isGM : rollerId === game.user.id) {
+    return rollerId === null ? rollGMSaves(request) : rollPlayerSave(request);
+  }
+  if (!socket) return Promise.resolve(noResults(request.targets));
+
+  const requestId = foundry.utils.randomID();
+  return new Promise((resolve) => {
+    const timeout = setTimeout(() => {
+      pendingSaveRequests.delete(requestId);
+      resolve(noResults(request.targets));
+    }, SAVE_RESPONSE_TIMEOUT);
+    pendingSaveRequests.set(requestId, (results) => {
+      clearTimeout(timeout);
+      pendingSaveRequests.delete(requestId);
+      resolve(results);
+    });
+    const payload = { ...request, requestId, from: game.user.id };
+    if (rollerId === null) socket.emit("rollGMSaves", payload);
+    else socket.emit("rollPlayerSave", { ...payload, to: rollerId });
+  });
+}
+
+/**
+ * The creatures inside an activity's placed area, filtered by what it affects
+ * (activity.target.affects.type): enemies (a different disposition from the
+ * caster), allies / willing (the same), the caster alone (self), or every
+ * creature. The caster is left out when the area is cast from themselves
+ * (range "self", e.g. Burning Hands); dead creatures are left out, and so are
+ * hidden tokens when a player casts — they can't target what they can't see.
+ */
+function tokensInActivityArea(activity, regions) {
+  const scene  = regions[0]?.parent;
+  const caster = activity.getUsageToken?.() ?? null;
+  const type   = activity.target?.affects?.type;
+  if (!scene) return [];
+  if (type === "self") return caster ? [caster] : [];
+
+  const fromSelf = activity.range?.units === "self";
+  return scene.tokens.filter(token => {
+    if (!token.actor || !regions.some(region => token.testInsideRegion(region))) return false;
+    if (caster && token.id === caster.id && fromSelf) return false;
+    if (token.actor.statuses?.has("dead")) return false;
+    if (token.hidden && !game.user.isGM) return false;
+    if (!caster) return true;
+    if (type === "enemy") return token.disposition !== caster.disposition;
+    if (type === "ally" || type === "willing") return token.disposition === caster.disposition;
+    return true;
+  });
+}
+
+/**
+ * For areas where the caster chooses who's affected (target.affects.choice, e.g.
+ * Spirit Guardians): a checkbox list of the creatures in the area, all checked.
+ * Resolves with the chosen tokens, or null if the dialog is closed.
+ */
+async function chooseAffected(activity, tokens) {
+  const DialogV2 = foundry.applications.api?.DialogV2;
+  if (!DialogV2 || !tokens.length) return tokens;
+  const rows = tokens.map(t => `
+    <label style="display:flex;align-items:center;gap:6px;margin:2px 0">
+      <input type="checkbox" name="lda-affected" value="${t.id}" checked> ${escapeHTML(t.name)}
+    </label>`).join("");
+  const ids = await DialogV2.prompt({
+    window:  { title: `${activity.item?.name ?? activity.name}: Affected Creatures` },
+    content: `<p>Choose which creatures in the area are affected.</p>${rows}`,
+    ok: {
+      label: "Confirm",
+      callback: (_event, button) => [...button.form.querySelectorAll('input[name="lda-affected"]:checked')].map(i => i.value)
+    },
+    rejectClose: false
+  });
+  return Array.isArray(ids) ? tokens.filter(t => ids.includes(t.id)) : null;
+}
+
+/**
+ * The targets of a save activity's use. When it placed an area (dnd5e places
+ * it before postUseActivity fires, in results.templates), that wins: the
+ * creatures inside it, set as the caster's targets so dnd5e's cards and damage
+ * tray agree. Otherwise, the caster's current targets.
+ */
+async function resolveSaveTargets(activity, results) {
+  const regions = (results?.templates ?? []).filter(r => r?.documentName === "Region");
+  let tokens;
+  if (regions.length) {
+    tokens = tokensInActivityArea(activity, regions);
+    if (activity.target?.affects?.choice) tokens = await chooseAffected(activity, tokens);
+    if (!tokens) return [];
+    if (canvas.scene === regions[0].parent) canvas.tokens?.setTargets(tokens.map(t => t.id), { mode: "replace" });
+    debug(`save automation: ${tokens.length} creature(s) in the area: ${tokens.map(t => t.name).join(", ")}`);
+  } else {
+    tokens = [...game.user.targets].map(t => t.document);
+  }
+  return tokens.filter(t => t?.actor).map(t => ({ actor: t.actor.uuid, token: t.uuid, name: t.name }));
+}
+
+/** dnd5e.postUseActivity — automate a save activity's saves, and damage in full mode. */
+async function onActivityUsed(activity, usageConfig, results) {
+  try {
+    if (activity?.type !== "save") return;
+    const mode  = getSaveAutomation();
+    const usage = results?.message;
+    if (mode === "off" || !usage) return;
+
+    const ability = activity.save?.ability?.first?.() ?? [...(activity.save?.ability ?? [])][0];
+    const dc      = Number(activity.save?.dc?.value);
+    if (!ability || !Number.isFinite(dc)) return;
+
+    const targets = await resolveSaveTargets(activity, results);
+    if (!targets.length) {
+      ui.notifications?.info(`Luck Dice Automation: no targets for ${activity.item?.name ?? activity.name} — no saves requested.`);
+      return;
+    }
+
+    // Group targets by who rolls them: an active player owner, else the GM (null).
+    const groups = new Map();
+    for (const target of targets) {
+      const key = activePlayerOwner((await resolveTarget(target)).actor)?.id ?? null;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(target);
+    }
+
+    const base = {
+      activityUuid: activity.uuid,
+      activityName: activity.item?.name ?? activity.name,
+      casterName:   activity.actor?.name,
+      usageId:      usage.id,
+      ability, dc
+    };
+    const requests = [];
+    for (const [rollerId, group] of groups) {
+      if (rollerId === null) {
+        if (!game.user.isGM && !getPrimaryGM()) {
+          ui.notifications?.warn(`Luck Dice Automation: no GM is connected to roll saves for ${group.map(t => t.name).join(", ")}.`);
+          continue;
+        }
+        requests.push(requestSaves(null, { ...base, targets: group, prompt: mode === "request" }));
+      } else if (mode !== "npc") {
+        for (const target of group) requests.push(requestSaves(rollerId, { ...base, targets: [target] }));
+      }
+    }
+
+    if (mode !== "full") {
+      // Nothing waits on the results; just surface failures.
+      requests.forEach(r => r.catch(err => console.error(`[${MODULE_ID}] save automation:`, err)));
+      return;
+    }
+    const outcome = new Map((await Promise.all(requests)).flat().map(r => [r.token, r.result]));
+    await applySaveDamage(activity, targets, outcome);
+  } catch (err) {
+    console.error(`[${MODULE_ID}] save automation error:`, err);
+  }
+}
+
+/**
+ * Full mode: roll the activity's damage once (with the caster's Luck Dice damage
+ * prompt), then apply it per target — full on a failed save; on a success, per
+ * the activity's on-save rule (½ by default, or none / full). Targets without a
+ * save result (dismissed, timed out) are left for the damage tray.
+ */
+async function applySaveDamage(activity, targets, outcome) {
+  if (!((activity.damage?.parts?.length ?? 0) > 0)) return; // a save with no damage (e.g. Hold Person)
+
+  const rolled  = targets.filter(t => outcome.get(t.token));
+  const missing = targets.filter(t => !outcome.get(t.token));
+  if (missing.length) {
+    ui.notifications?.warn(`Luck Dice Automation: no save from ${missing.map(t => t.name).join(", ")} — apply their damage from the damage card's tray.`);
+  }
+  if (!rolled.length) return;
+
+  const rolls = await activity.rollDamage({}, { configure: false });
+  const damageMessage = rolls?.[0]?.parent;
+  if (!damageMessage) return;
+  await pendingLuckDamage.get(damageMessage.id);
+
+  const onSave = activity.damage?.onSave ?? "half";
+  const savedMultiplier = { none: 0, half: 0.5, full: 1 }[onSave] ?? 0.5;
+  await requestApplyDamage(damageMessage, rolled.map(t => {
+    const saved = !!outcome.get(t.token).passed;
+    return { ...t, saved, multiplier: saved ? savedMultiplier : 1 };
+  }));
 }
 
 // ── Saves, checks and concentration ──────────────────────────────────────────
 
+// Post-roll hooks as dnd5e 6 fires them: saves and ability checks only have the
+// plain name (Actor5e#rollD20Test fires no V2 variant); skills, tools and
+// concentration fire both, so their V2 names are used.
 const D20_TESTS = {
-  "dnd5e.rollSavingThrowV2":   { title: "Failed Saving Throw",       rollType: "saving throw",       natOneSave: true },
+  "dnd5e.rollSavingThrow":     { title: "Failed Saving Throw",       rollType: "saving throw",       natOneSave: true },
   "dnd5e.rollConcentrationV2": { title: "Failed Concentration Save", rollType: "concentration save", natOneSave: true },
-  "dnd5e.rollAbilityCheckV2":  { title: "Failed Ability Check",      rollType: "ability check" },
+  "dnd5e.rollAbilityCheck":    { title: "Failed Ability Check",      rollType: "ability check" },
   "dnd5e.rollSkillV2":         { title: "Failed Skill Check",        rollType: "skill check" },
   "dnd5e.rollToolCheckV2":     { title: "Failed Tool Check",         rollType: "tool check" },
 };
@@ -357,12 +800,7 @@ async function onD20TestRolled(rolls, data, test) {
 
     debug(`native ${test.rollType}: ${actor.name} rolled ${total} vs DC ${dc}`);
 
-    let current = roll;
-    const reporter = async (entry, { roll: newRoll, bonusRoll } = {}) => {
-      if (newRoll) current = newRoll;
-      else if (bonusRoll) current = combineRolls(current, bonusRoll);
-      await recordD20Step(message, current, total, { kind: "check", ...entry });
-    };
+    const reporter = cardReporter(message, roll);
 
     // dnd5e's own rule: the roller and the GM always see a DC; others per its setting.
     const showDC = message.shouldDisplayChallenge ?? true;
@@ -370,10 +808,24 @@ async function onD20TestRolled(rolls, data, test) {
       ? await LDA.promptNatOneSave(actor, total, dc, roll, null, "", showDC, reporter)
       : await LDA.promptLuckOnCheckFail(actor, total, dc, null, "", roll, test.title, test.rollType, showDC, reporter);
 
-    await finishHistory(message, result?.passed && result.finalTotal >= dc ? "passed" : "failed");
+    await finishCardHistory(message, result?.passed && result.finalTotal >= dc ? "passed" : "failed");
+    await refreshOriginSummary(message);
   } catch (err) {
     console.error(`[${MODULE_ID}] native ${test.rollType} error:`, err);
   }
+}
+
+/**
+ * A save linked to a usage card is summarized inside that card (dnd5e's
+ * "summarize chat"), and the usage card doesn't re-render when the save card
+ * changes — so after Luck Dice change the roll, its summary would still show the
+ * original failure. Touch the usage card so it re-renders for everyone.
+ */
+async function refreshOriginSummary(message) {
+  if (!message.getFlag(MODULE_ID, HISTORY_FLAG)?.entries?.length) return;
+  const origin = message.getOriginatingMessage?.();
+  if (!origin || origin === message || !origin.canUserModify?.(game.user, "update")) return;
+  await origin.setFlag(MODULE_ID, "summaryRefresh", Date.now());
 }
 
 // ── Luck Dice history on dnd5e's cards ────────────────────────────────────────
@@ -387,7 +839,7 @@ async function onD20TestRolled(rolls, data, test) {
  * roll visibility hides them.
  */
 function injectNativeHistory(message, html) {
-  if (!(html instanceof HTMLElement)) return;
+  if (!(html instanceof HTMLElement) || html.querySelector(".midi-results")) return;
   html.querySelectorAll(".lda-luck-history, .lda-applied-damage").forEach(el => el.remove());
   if (!message.isContentVisible) return;
 
@@ -397,7 +849,13 @@ function injectNativeHistory(message, html) {
     blocks.push(renderLuckSection(history));
   }
   const applied = message.getFlag?.(MODULE_ID, APPLIED_FLAG);
-  if (applied?.length && canSeeDamageApplication()) blocks.push(renderAppliedSection(applied));
+  if (applied?.length) {
+    // The damage is already applied, per target and save. dnd5e's tray would
+    // show everyone at full damage (it doesn't know the saves) and could apply
+    // it a second time, so the "Applied" row replaces it.
+    html.querySelectorAll("damage-application").forEach(el => el.remove());
+    if (canSeeDamageApplication()) blocks.push(renderAppliedSection(applied));
+  }
   if (!blocks.length) return;
 
   const rollRow = [...html.querySelectorAll("section.icon-row")].filter(row => row.querySelector(".dice-roll")).at(-1);
@@ -414,7 +872,7 @@ function canSeeDamageApplication() {
 /** "Applied: Hill Giant 14 · Goblin 7" as a card row (healing shown as +N). */
 function renderAppliedSection(applied) {
   const parts = applied.map(a =>
-    `<span style="white-space:nowrap">${escapeHTML(a.name)} <strong>${a.amount < 0 ? `+${-a.amount}` : a.amount}</strong></span>`);
+    `<span style="white-space:nowrap">${escapeHTML(a.name)} <strong>${a.amount < 0 ? `+${-a.amount}` : a.amount}</strong>${a.saved ? ` <span style="opacity:0.7">(saved)</span>` : ""}</span>`);
   const wrapper = document.createElement("div");
   wrapper.innerHTML = `
     <section class="icon-row lda-applied-damage" style="display:flex;align-items:flex-start;gap:6px;margin:2px 0">
@@ -429,37 +887,57 @@ function renderAppliedSection(applied) {
 // ── Hooks ─────────────────────────────────────────────────────────────────────
 
 Hooks.once("ready", () => {
+  // Luck history and results on dnd5e roll cards. Registered in both modes: the
+  // roll-request window uses dnd5e's cards with or without Midi-QoL. (Midi's own
+  // usage cards are handled by attack.js.)
+  Hooks.on("renderChatMessageHTML", injectNativeHistory);
+  Hooks.on("dnd5e.renderChatMessage", injectNativeHistory);
+
   if (game.modules.get("midi-qol")?.active) {
     console.log(`[${MODULE_ID}] native.js: Midi-QoL is active — using Midi mode (attack.js)`);
     return;
   }
   console.log(`[${MODULE_ID}] native.js: Midi-QoL not active — using native dnd5e mode`);
 
-  // GM-side work requested by players' clients (scorpious187s-lib routes "gm"
-  // handlers to the primary active GM only, so damage is never applied twice).
+  // Socket work between clients, via scorpious187s-lib's router. "gm" handlers run
+  // on the primary active GM only, so nothing is rolled or applied twice; "any"
+  // handlers run everywhere and act only on messages addressed to this user.
+  const reply = (payload, results) => socket?.emit("saveResults", { to: payload.from, requestId: payload.requestId, results });
   socket = game.modules.get("scorpious187s-lib")?.api?.utils?.makeSocketRouter?.(MODULE_ID, {
     gm: {
-      applyDamage: (payload) => applyCardDamage(payload).catch(err => console.error(`[${MODULE_ID}] applyDamage error:`, err))
+      applyDamage: (payload) => applyCardDamage(payload)
+        .catch(err => console.error(`[${MODULE_ID}] applyDamage error:`, err)),
+      rollGMSaves: (payload) => rollGMSaves(payload)
+        .then(results => reply(payload, results), err => { console.error(`[${MODULE_ID}] rollGMSaves error:`, err); reply(payload, noResults(payload.targets)); })
+    },
+    any: {
+      rollPlayerSave: (payload) => {
+        if (payload?.to !== game.user.id) return;
+        rollPlayerSave(payload)
+          .then(results => reply(payload, results), err => { console.error(`[${MODULE_ID}] rollPlayerSave error:`, err); reply(payload, noResults(payload.targets)); });
+      },
+      saveResults: (payload) => {
+        if (payload?.to !== game.user.id) return;
+        pendingSaveRequests.get(payload.requestId)?.(payload.results ?? []);
+      }
     }
   }) ?? null;
-  if (!socket) console.warn(`[${MODULE_ID}] native.js: scorpious187s-lib socket router unavailable — players' damage can't be applied by the GM`);
+  if (!socket) console.warn(`[${MODULE_ID}] native.js: scorpious187s-lib socket router unavailable — GM-side damage and remote saves are disabled`);
 
   Hooks.on("dnd5e.rollAttackV2", onAttackRolled);
-  // Track each damage card's Luck Dice prompt, so attack automation can wait for
-  // it before applying the damage.
+  // Each card's Luck Dice prompt is tracked, so automation can wait for it.
   Hooks.on("dnd5e.rollDamageV2", (rolls, data) => {
-    const id      = rolls?.[0]?.parent?.id;
-    const pending = onDamageRolled(rolls, data);
-    if (!id) return;
-    pendingLuckDamage.set(id, pending);
-    pending.finally(() => { if (pendingLuckDamage.get(id) === pending) pendingLuckDamage.delete(id); });
+    const message = rolls?.[0]?.parent;
+    trackPending(pendingLuckDamage, message?.id, onDamageRolled(rolls, data));
+    if (message && isPrivateGMCard(message) && getPrivateRollOutcome() === "share") {
+      shareWithTargets(message, message.system?.targets).catch(err => console.error(`[${MODULE_ID}] share damage card:`, err));
+    }
   });
   for (const [hook, test] of Object.entries(D20_TESTS)) {
-    Hooks.on(hook, (rolls, data) => onD20TestRolled(rolls, data, test));
+    Hooks.on(hook, (rolls, data) =>
+      trackPending(pendingLuckChecks, rolls?.[0]?.parent?.id, onD20TestRolled(rolls, data, test)));
   }
-
-  // Both hooks run the same idempotent injection; whichever fires last wins.
-  Hooks.on("renderChatMessageHTML", injectNativeHistory);
-  Hooks.on("dnd5e.renderChatMessage", injectNativeHistory);
+  // Save automation. Hooks.call: never return false here, that would cancel dnd5e's follow-ups.
+  Hooks.on("dnd5e.postUseActivity", (activity, usageConfig, results) => { onActivityUsed(activity, usageConfig, results); });
 });
 })();

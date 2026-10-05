@@ -199,7 +199,8 @@ async function finishSaveLuck(workflow, uuid, passed) {
  * safe to run from more than one render hook.
  */
 function injectLuckHistory(message, html) {
-  if (!(html instanceof HTMLElement)) return;
+  // Only Midi's usage cards; dnd5e roll cards are rendered by native.js.
+  if (!(html instanceof HTMLElement) || !html.querySelector(".midi-results")) return;
   html.querySelectorAll(".lda-luck-history, .lda-luck-saves").forEach(el => el.remove());
   const fallback = () => html.querySelector(".midi-results") ?? html;
 
