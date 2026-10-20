@@ -1,0 +1,11 @@
+{
+  "name": "scorpious187s-luck-dice-automation",
+  "private": true,
+  "description": "Development scripts only; the Foundry module is described by module.json.",
+  "scripts": {
+    "test": "node --test tests/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

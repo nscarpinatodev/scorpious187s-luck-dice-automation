@@ -20,6 +20,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Run tests
+        run: |
+          # Native-mode modules against a fake Foundry / dnd5e (tests/env.mjs).
+          # A failure stops the release before anything is published.
+          for f in scripts/*.js; do node --check "$f"; done
+          for f in scripts/*.mjs scripts/native/*.mjs; do node --check "$f"; done
+          node --test tests/*.test.mjs
+
       - name: Derive version and URLs from the tag
         id: meta
         run: |

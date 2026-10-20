@@ -199,7 +199,7 @@ async function finishSaveLuck(workflow, uuid, passed) {
  * safe to run from more than one render hook.
  */
 function injectLuckHistory(message, html) {
-  // Only Midi's usage cards; dnd5e roll cards are rendered by native.js.
+  // Only Midi's usage cards; dnd5e roll cards are rendered by native mode (scripts/native/).
   if (!(html instanceof HTMLElement) || !html.querySelector(".midi-results")) return;
   html.querySelectorAll(".lda-luck-history, .lda-luck-saves").forEach(el => el.remove());
   const fallback = () => html.querySelector(".midi-results") ?? html;
@@ -278,7 +278,7 @@ function isCritDiceMaximized() {
 
 // ── Attack prompts ────────────────────────────────────────────────────────────
 // promptLuckOnMiss / promptNatOne work on an "attack" adapter so Midi mode and
-// native dnd5e mode (native.js) share them:
+// native dnd5e mode (scripts/native/) share them:
 //   actor, state                       the attacker; per-attack prompt state
 //   total(), hitState()                current attack total; true / false / null
 //   reroll(evaluate, label), addDice(n) apply luck to the roll and record it
@@ -611,7 +611,7 @@ function applyLuckySavePass(workflow, { uuid, details, tokenDoc, token, newTotal
 
 Hooks.once("ready", () => {
   console.log(`[${MODULE_ID}] attack.js ready — midi-qol active=${game.modules.get("midi-qol")?.active ?? false}`);
-  // Without Midi, native.js handles rolls through dnd5e's own hooks instead.
+  // Without Midi, native mode (scripts/native/) handles rolls through dnd5e's own hooks instead.
   if (!game.modules.get("midi-qol")?.active) return;
 
   // ── Luck Dice history on Midi's card ───────────────────────────────────────
