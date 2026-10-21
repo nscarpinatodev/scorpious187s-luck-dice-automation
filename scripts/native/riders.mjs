@@ -15,7 +15,8 @@
 // through dnd5e first, with its own dialog; dnd5e's follow-up roll for that use
 // is suppressed (see claimRiderUse) so its dice land on the hit instead.
 
-import { MODULE_ID, debug, escapeHTML, isOnHitRidersEnabled } from "./shared.mjs";
+import { MODULE_ID, debug, escapeHTML, isOnHitRidersEnabled, NO_DIALOG } from "./shared.mjs";
+import { tokenDistance } from "./advantage.mjs";
 
 export const RIDERS_FLAG = "riders";
 
@@ -32,8 +33,11 @@ export const RIDERS = {
   "hex":          { mode: "mark", activities: (item) => damageActivities(item).slice(0, 1) },
   "sneak-attack": {
     mode: "choose", checked: true, oncePerTurn: true,
-    eligible: ({ activity, card }) => isWeaponAttack(activity)
-      && (activity.item?.system?.properties?.has?.("fin") || isRanged(activity, card)),
+    // A finesse or ranged weapon, and either advantage on the roll, or an ally of yours (not incapacitated)
+    // within 5 ft of the target — and never with disadvantage.
+    eligible: ({ activity, card, tokens }) => isWeaponAttack(activity)
+      && (activity.item?.system?.properties?.has?.("fin") || isRanged(activity, card))
+      && sneakAttackAllowed(activity, card, tokens),
     activities: (item) => damageActivities(item).slice(0, 1)
   },
   "divine-smite": {
@@ -50,6 +54,23 @@ export const RIDERS = {
     }
   }
 };
+
+const INCAPACITATING = ["incapacitated", "paralyzed", "petrified", "stunned", "unconscious", "dead"];
+
+/** Sneak Attack's condition: advantage, or an active ally within 5 ft of every target; never disadvantage. */
+function sneakAttackAllowed(activity, card, tokens) {
+  const modes = CONFIG.Dice.D20Roll?.ADV_MODE ?? { ADVANTAGE: 1, DISADVANTAGE: -1 };
+  const mode = card?.rolls?.[0]?.options?.advantageMode;
+  if (mode === modes.DISADVANTAGE) return false;
+  if (mode === modes.ADVANTAGE) return true;
+  const usage = activity?.getUsageToken?.() ?? null;
+  const me = usage?.document ?? usage;
+  if (!me?.parent || !tokens?.length) return false;
+  const reach = canvas?.grid?.distance ?? 5;
+  return tokens.every(target => [...(me.parent.tokens ?? [])].some(ally => ally.id !== me.id && ally.id !== target.id
+    && ally.actor && ally.disposition === me.disposition && !INCAPACITATING.some(s => ally.actor.statuses?.has?.(s))
+    && tokenDistance(ally, target) <= reach));
+}
 
 /** Whether an effect on a target came from this item (dnd5e's effects tray records the source). */
 function cameFrom(effect, item) {
@@ -68,6 +89,7 @@ export async function eligibleRiders(activity, card) {
   const actor = activity?.actor;
   if (!actor) return [];
   const hits = (card?.system?.evaluatedTargets ?? []).filter(t => !t.isMiss);
+  const tokens = (await Promise.all(hits.map(async t => t.token ? await fromUuid(t.token) : null))).filter(t => t?.actor);
   const targets = (await Promise.all(hits.map(async t => (await fromUuid(t.token ?? t.uuid))?.actor ?? await fromUuid(t.actor ?? t.uuid))))
     .filter(Boolean);
   const turn = turnKey();
@@ -79,7 +101,7 @@ export async function eligibleRiders(activity, card) {
     if (rider.mode === "mark") {
       if (!targets.length || !targets.every(t => t.effects?.some?.(e => cameFrom(e, item)))) continue;
     } else {
-      if (rider.eligible && !rider.eligible({ activity, card, targets })) continue;
+      if (rider.eligible && !rider.eligible({ activity, card, targets, tokens })) continue;
       if (rider.oncePerTurn && turn && usedThisTurn.get(`${actor.uuid}:${identifier}`) === turn) continue;
     }
     const activities = rider.activities(item, { targets });
@@ -174,7 +196,7 @@ export async function addOnHitRiders(message, activity, card) {
       // Only the first activity is used (spends the resource); the rest just roll.
       const act = index === 0 ? await riderActivity(choice, base) : base;
       if (!act) break;
-      const riderRolls = await act.rollDamage({ isCritical }, { configure: false }, { create: false });
+      const riderRolls = await act.rollDamage({ isCritical, ...NO_DIALOG }, { configure: false }, { create: false });
       if (!riderRolls?.length) continue;
       if (game.dice3d) for (const r of riderRolls) await game.dice3d.showForRoll(r, game.user, true, null, false);
       rolls.push(...riderRolls);

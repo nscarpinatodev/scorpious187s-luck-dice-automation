@@ -56,7 +56,7 @@ test("the player's client rolls their character's check against the DC, without 
   game.user = player;
   const message = prompt(actor, { author: player });
   await onConcentrationPrompt(message);
-  assert.deepEqual(actor.calls, [{ config: { target: 12 }, dialog: { configure: false } }]);
+  assert.deepEqual(actor.calls, [{ config: { target: 12, "scorpious187s-luck-dice-automation": { noDialog: true } }, dialog: { configure: false } }]);
   assert.equal(message.deleted, true);
 });
 
@@ -70,7 +70,7 @@ test("the GM rolls for NPCs and offline players, with the prompt's ability", asy
   const npc = wizard({ owner: null });
   const message = prompt(npc, { ability: "wis" });
   await onConcentrationPrompt(message);
-  assert.deepEqual(npc.calls[0].config, { target: 12, ability: "wis" });
+  assert.deepEqual(npc.calls[0].config, { target: 12, ability: "wis", "scorpious187s-luck-dice-automation": { noDialog: true } });
   assert.equal(message.deleted, true);
 });
 

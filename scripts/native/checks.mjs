@@ -1,7 +1,8 @@
 // ── Scorpious187's Luck Dice Automation — Native dnd5e 6 ──────────────────────
 // Saves, ability checks, skills, tools and concentration: Luck Dice on a failure; breaking concentration.
 
-import { LDA, MODULE_ID, debug, getKeptD20Result, HISTORY_FLAG, requestRollActors, isConcentrationBreakEnabled, finishCardHistory, cardReporter, canUseLuck } from "./shared.mjs";
+import { correctDeathSave } from "./deathsaves.mjs";
+import { LDA, MODULE_ID, debug, getKeptD20Result, HISTORY_FLAG, requestRollActors, isConcentrationBreakEnabled, finishCardHistory, cardReporter, canUseLuck, promptChoice, escapeHTML, getLegendaryResistance } from "./shared.mjs";
 
 // ── Saves, checks and concentration ──────────────────────────────────────────
 
@@ -74,7 +75,47 @@ export async function refreshOriginSummary(message) {
 /** dnd5e.rollConcentrationV2: Luck Dice first (as for any save), then the break. */
 export async function onConcentrationRolled(rolls, data, test) {
   await onD20TestRolled(rolls, data, test);
+  await offerLegendaryResistance(rolls?.[0]?.parent, data?.subject);
   await breakConcentrationIfFailed(rolls?.[0]?.parent, data?.subject);
+}
+
+/** dnd5e.rollSavingThrow — Luck Dice on a failure (a death save's result recorded again if they change it), then an NPC's Legendary Resistance. */
+export async function onSaveRolled(rolls, data, test) {
+  const first = rolls?.[0];
+  const original = first ? { isSuccess: Number(first.total ?? 0) >= Number(first.options?.target ?? 10), isCritical: !!first.isCritical, isFumble: !!first.isFumble } : null;
+  await onD20TestRolled(rolls, data, test);
+  if (original && first?.parent?.system?.type === "death") await correctDeathSave(first.parent, data?.subject, original);
+  await offerLegendaryResistance(rolls?.[0]?.parent, data?.subject);
+}
+
+/**
+ * The "legendaryResistance" setting: an NPC failed a save it could resist
+ * (dnd5e's own test — an owned NPC, Legendary Resistance left, not already
+ * resisted or broken). The GM is asked, or it's used automatically; dnd5e's
+ * resistSave spends a use and turns the save into a success. True if used.
+ */
+export async function offerLegendaryResistance(message, actor) {
+  try {
+    const mode = getLegendaryResistance();
+    if (mode === "off" || !message || !game.user.isGM) return false;
+    if (!message.system?.canResist || typeof actor?.system?.resistSave !== "function") return false;
+    const roll = message.rolls?.[0];
+    const { value = 0, max = 0 } = actor.system.resources?.legres ?? {};
+    if (mode === "prompt") {
+      const what = message.system?.type === "concentration" || roll?.options?.isConcentration ? "concentration save" : "saving throw";
+      const choice = await promptChoice("Legendary Resistance",
+        `<p><strong>${escapeHTML(message.speakerActor?.name ?? actor.name)}</strong> failed its ${what}
+         (${roll?.total ?? "?"} vs DC ${roll?.options?.target ?? "?"}). Use Legendary Resistance? (${value} of ${max} left)</p>`,
+        [{ action: "use", label: "Use Legendary Resistance" }, { action: "fail", label: "Fail the Save" }]);
+      if (choice !== "use") return false;
+    }
+    await actor.system.resistSave(message);
+    console.log(`[${MODULE_ID}] legendary resistance: ${actor.name} succeeded instead (${value - 1} of ${max} left)`);
+    return true;
+  } catch (err) {
+    console.error(`[${MODULE_ID}] legendary resistance error:`, err);
+    return false;
+  }
 }
 
 export async function breakConcentrationIfFailed(message, actor) {
@@ -84,7 +125,7 @@ export async function breakConcentrationIfFailed(message, actor) {
     const roll = message.rolls?.[0];
     const dc   = Number(roll?.options?.target);
     if (!Number.isFinite(dc) || dc <= 0 || !roll.isFailure) return; // no DC: nothing says it failed
-    if (message.system?.outcome === "broken") return;
+    if (message.system?.outcome === "broken" || message.system?.resisted) return; // resisted: Legendary Resistance made it a success
     const ended = await actor.endConcentration();
     if (ended?.length) await message.update({ "system.outcome": "broken" });
     console.log(`[${MODULE_ID}] concentration: ${actor.name} failed (${roll.total} vs DC ${roll.options.target}) — ${ended?.length ? "broken" : "nothing to end"}`);

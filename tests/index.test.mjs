@@ -21,9 +21,10 @@ test("ready registers native mode's hooks", () => {
     "createActiveEffect"]) {
     assert.equal(hooks.count(name), 1, name);
   }
-  assert.equal(hooks.count("combatTurnChange"), 2);
+  assert.equal(hooks.count("combatTurnChange"), 3);
   assert.equal(hooks.count("dnd5e.rollAttackV2"), 2);                // marks used up; Luck Dice + automation
-  assert.equal(hooks.count("dnd5e.preRollAttackV2"), 2);             // advantage reasons; skip the window
+  assert.equal(hooks.count("dnd5e.preRollAttackV2"), 3);             // solid walls; advantage reasons; skip the window
+  assert.equal(hooks.count("dnd5e.preUseActivity"), 1);              // solid walls
   assert.equal(hooks.count("renderAttackRollConfigurationDialog"), 1);                 // reactions back; lingering areas + repeat saves
 });
 
@@ -101,7 +102,7 @@ test("attacks: only multi-ray spells with the ray setting take over", () => {
 });
 
 test("skip the attack roll window: only with the setting, never over an explicit choice, never cancels", () => {
-  const handler = hooks.handlers("dnd5e.preRollAttackV2")[1];
+  const handler = hooks.handlers("dnd5e.preRollAttackV2")[2];
   const off = {};
   assert.equal(handler({}, off, {}), undefined);
   assert.equal(off.configure, undefined);                           // setting off: dnd5e decides
@@ -116,7 +117,7 @@ test("skip the attack roll window: only with the setting, never over an explicit
 });
 
 test("skip the attack roll window: AC5E's opt-in choices keep it open; its plain verdict doesn't", () => {
-  const handler = hooks.handlers("dnd5e.preRollAttackV2")[1];
+  const handler = hooks.handlers("dnd5e.preRollAttackV2")[2];
   settings.skipAttackDialog = true;
   game.modules.set("automated-conditions-5e", { active: true });
   const withAc5e = (side) => ({ rolls: [{ options: { "automated-conditions-5e": { subject: {}, opponent: {}, ...side } } }] });
@@ -144,4 +145,31 @@ test("skip the attack roll window: AC5E's opt-in choices keep it open; its plain
   } finally {
     game.modules.delete("automated-conditions-5e");
   }
+});
+
+test("the last word on roll windows (dnd5e.preRollV2): the module's own rolls, skipped attacks, applied healing", () => {
+  const [handler] = hooks.handlers("dnd5e.preRollV2");
+  const forced = { configure: true };                               // e.g. Flash Rolls turned it back on
+  handler({ "scorpious187s-luck-dice-automation": { noDialog: true }, hookNames: ["damage", ""] }, forced);
+  assert.equal(forced.configure, false);
+
+  settings.skipAttackDialog = true;
+  const attack = { configure: true };
+  handler({ hookNames: ["attack", "d20Test", ""], subject: { type: "attack" } }, attack);
+  assert.equal(attack.configure, false);
+  game.modules.set("automated-conditions-5e", { active: true });
+  try {
+    const optin = { configure: true };
+    handler({ hookNames: ["attack", "d20Test", ""], subject: { type: "attack" },
+      rolls: [{ options: { "automated-conditions-5e": { subject: { bonus: [{ id: "x", optin: true }] } } } }] }, optin);
+    assert.equal(optin.configure, true);                           // AC5E's choice keeps it open
+  } finally { game.modules.delete("automated-conditions-5e"); }
+
+  settings.healingAutomation = true;
+  const heal = { configure: true };
+  handler({ hookNames: ["damage", ""], subject: { type: "heal" } }, heal);
+  assert.equal(heal.configure, false);
+  const manual = { configure: true };                               // a damage roll the module doesn't apply
+  handler({ hookNames: ["damage", ""], subject: { type: "save" } }, manual);
+  assert.equal(manual.configure, true);
 });

@@ -152,6 +152,8 @@ test("rays: one attack each at its target, in order, one at a time; targets rest
       return [{ parent: { id } }];
     }
   };
+  // The targets are always confirmed first for rays (AC5E allows one target when casting).
+  dialogs.push(async (ui) => { assert.match(ui.config.content, /Target each creature to fire at/); return "ok"; });
   dialogs.push(async (ui) => {
     assert.match(ui.config.content, /4 rays, one attack roll each\./);
     ui.change("lda-hits-0", 1); ui.change("lda-hits-1", 3);
@@ -170,9 +172,11 @@ test("rays: a cancelled attack stops the volley; no targets gives a notice", asy
   canvas.tokens.setTargets(["a"]);
   let rolled = 0;
   const activity = { type: "attack", item: item("scorching-ray"), actor: {}, rollAttack: async () => { rolled++; return null; } };
+  dialogs.push(async () => "ok");
   await fireRays(activity, {}, { message: usage(0) }, { count: 3, noun: "ray" });
   assert.equal(rolled, 1);
   canvas.tokens.setTargets([]);
+  dialogs.push(async () => "ok");
   await fireRays(activity, {}, { message: usage(0) }, { count: 3, noun: "ray" });
   assert.match(notes.at(-1), /no targets for scorching-ray/);
 });

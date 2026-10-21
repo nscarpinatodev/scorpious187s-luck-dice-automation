@@ -84,7 +84,7 @@ test("end of its turn: a pass removes the spell's effects; a fail keeps them", a
   failing.actor.addEffect(effect("paralyzed", hp.uuid, { flags: flag }));
   await onTurnEndRepeatSaves(fight, ended("orc"));
   assert.equal(failing.actor.saves.length, 1);
-  assert.deepEqual(failing.actor.saves[0], { ability: "wis", target: 15 });
+  assert.deepEqual(failing.actor.saves[0], { ability: "wis", target: 15, "scorpious187s-luck-dice-automation": { noDialog: true } });
   assert.equal(repeatEffects(failing.actor).length, 1);
 
   const passing = creature("goblin", { passes: [true] });

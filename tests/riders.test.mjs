@@ -3,7 +3,7 @@ import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { eligibleRiders, addOnHitRiders, claimRiderUse, spendsSomething, RIDERS } from "../scripts/native/riders.mjs";
 
-const { settings, dialogs, uuids, damageRoll } = env;
+const { settings, dialogs, uuids, damageRoll, makeToken } = env;
 beforeEach(() => { env.reset(); settings.onHitRiders = true; game.combat = null; });
 
 /** A damage activity whose rolls (and critical flag) are recorded. */
@@ -36,8 +36,9 @@ function weaponAttack(actor, { finesse = false, range = "melee", mode } = {}) {
   return { type: "attack", actor, attack: { type: { value: range, classification: "weapon" } },
     item: { type: "weapon", system: { properties: new Set(finesse ? ["fin"] : []) } } };
 }
-const attackCard = (targets, { crit = false, mode } = {}) => ({
-  rolls: [{ isCritical: crit }], system: { mode, evaluatedTargets: targets.map(t => ({ ...t, isMiss: false })) }
+// Rolled with advantage unless told otherwise (Sneak Attack's usual way in).
+const attackCard = (targets, { crit = false, mode, advantageMode = 1 } = {}) => ({
+  rolls: [{ isCritical: crit, options: { advantageMode } }], system: { mode, evaluatedTargets: targets.map(t => ({ ...t, isMiss: false })) }
 });
 function damageCard() {
   const message = { rolls: [damageRoll(6)], flags: {}, getFlag: (_m, k) => message.flags[k],
@@ -171,4 +172,28 @@ test("a rider that spends a slot is used through dnd5e; its scaled activity roll
   } finally {
     dialogs.length = 0;
   }
+});
+
+test("Sneak Attack needs advantage or an ally beside the target, and never disadvantage", async () => {
+  const sneak = riderItem("Actor.rogue", "sneak-attack", [damageActivity("Sneak", 10)]);
+  const rogueToken = makeToken("rogue", "Rogue", { disposition: 1 });
+  const goblinToken = makeToken("goblin", "Goblin", { disposition: -1 });
+  const place = (token, col) => Object.assign(token.document, { x: col * 100, y: 0, elevation: 0, width: 1, height: 1,
+    getOccupiedGridSpaceOffsets: () => [{ i: 0, j: col }] });
+  place(rogueToken, 0); place(goblinToken, 5);
+  canvas.grid = { isGridless: false, distance: 5, size: 100, getCenterPoint: ({ i, j }) => ({ x: j * 100 + 50, y: i * 100 + 50 }),
+    measurePath: ([a, b]) => ({ distance: Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y)) / 100 * 5 }) };
+  const rogue = attacker([sneak]);
+  const atk = { ...weaponAttack(rogue, { range: "ranged" }), getUsageToken: () => rogueToken.document };
+  const hit = { actor: goblinToken.document.actor.uuid, token: goblinToken.document.uuid, name: "Goblin" };
+  const offered = async (advantageMode) => names(await eligibleRiders(atk, attackCard([hit], { advantageMode })));
+
+  assert.deepEqual(await offered(1), ["sneak-attack"]);        // advantage
+  assert.deepEqual(await offered(0), []);                      // normal, no ally
+  const ally = makeToken("ally", "Fighter", { disposition: 1 });
+  place(ally, 4);                                              // beside the goblin
+  assert.deepEqual(await offered(0), ["sneak-attack"]);
+  assert.deepEqual(await offered(-1), []);                     // disadvantage: never
+  ally.document.actor.statuses = new Set(["unconscious"]);
+  assert.deepEqual(await offered(0), []);                      // an incapacitated ally doesn't count
 });

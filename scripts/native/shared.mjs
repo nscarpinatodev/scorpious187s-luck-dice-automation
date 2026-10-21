@@ -9,11 +9,18 @@ export const {
   combineRolls, HISTORY_FLAG, diceFaces, renderLuckSection, requestRollActors,
   getAttackAutomation, getSaveAutomation, getPrivateRollOutcome,
   isEffectAutomationEnabled, isHealingAutomationEnabled,
-  isDamageOnlyAutomationEnabled, isConcentrationBreakEnabled, isConcentrationAutoRollEnabled, isOnHitRidersEnabled, isLingeringAreasEnabled, isRepeatSavesEnabled, getReactionPrompts, isSkipAttackDialogEnabled, isAttackAdvantageEnabled, isRayAutomationEnabled, getTargetConfirmation,
+  isDamageOnlyAutomationEnabled, isConcentrationBreakEnabled, isConcentrationAutoRollEnabled, isOnHitRidersEnabled, isLingeringAreasEnabled, isRepeatSavesEnabled, getReactionPrompts, isSkipAttackDialogEnabled, isAttackAdvantageEnabled, getLegendaryResistance, isWeaponMasteryEnabled, isAutoCritsEnabled, isOpportunityAttacksEnabled, isRetaliationEnabled, isDeathSavesEnabled, isClearInstantAreasEnabled, isTurnSummaryEnabled, isWallSpellsEnabled, isRayAutomationEnabled, getTargetConfirmation,
   readCardHistory, updateRollCard, recordCardStep, finishCardHistory, cardReporter,
 } = LDA;
 
 export const APPLIED_FLAG = "appliedDamage";
+
+/**
+ * Spread into the config of a roll the module makes without a window (with `{ configure: false }`), so the
+ * final dnd5e.preRollV2 check keeps it that way when another module turns the window back on (Flash Rolls 5e
+ * does, for actors with an active player owner).
+ */
+export const NO_DIALOG = Object.freeze({ [MODULE_ID]: { noDialog: true } });
 export const escapeHTML   = (s) => (foundry.utils.escapeHTML ?? String)(String(s ?? ""));
 
 console.log(`[${MODULE_ID}] native modules loaded — user=${game?.user?.name ?? "unknown"} isGM=${game?.user?.isGM ?? "?"}`);

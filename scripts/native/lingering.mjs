@@ -19,7 +19,7 @@
 
 import { requestApplyDamage } from "./apply.mjs";
 import { automateSaves } from "./saves.mjs";
-import { MODULE_ID, debug, getSaveAutomation, getPrimaryGM, isLingeringAreasEnabled, pendingLuckDamage, socket } from "./shared.mjs";
+import { MODULE_ID, debug, getSaveAutomation, getPrimaryGM, isLingeringAreasEnabled, pendingLuckDamage, socket, NO_DIALOG } from "./shared.mjs";
 import { regionsOf } from "./targeting.mjs";
 
 export const LINGERING_FLAG = "lingering";
@@ -27,7 +27,7 @@ export const LINGERING_FLAG = "lingering";
 /** By item identifier. */
 export const LINGERING_SPELLS = new Set([
   "spirit-guardians", "moonbeam", "cloud-of-daggers", "insect-plague", "cloudkill", "sickening-radiance",
-  "incendiary-cloud", "evards-black-tentacles", "stinking-cloud", "web"
+  "incendiary-cloud", "evards-black-tentacles", "stinking-cloud", "web", "blade-barrier", "wall-of-thorns"
 ]);
 
 /** "2014" or "2024", from the item's source, else the world's rules version. */
@@ -37,10 +37,15 @@ export function rulesOf(item) {
   try { return game.settings.get("dnd5e", "rulesVersion") === "legacy" ? "2014" : "2024"; } catch { return "2024"; }
 }
 
-/** The activity a trigger runs: the save / damage activity marked "special" (2014 data), else the first one. */
+/**
+ * The activity a trigger runs: the save / damage activity marked "special" (2014 data); else, when there are
+ * several, the one with no activation of its own (2024 data, e.g. Wall of Thorns' Traversal Save); else the first.
+ */
 export function triggerActivity(item) {
   const activities = [...(item?.system?.activities?.values?.() ?? [])].filter(a => a.type === "save" || a.type === "damage");
-  return activities.find(a => a.activation?.type === "special") ?? activities[0] ?? null;
+  return activities.find(a => a.activation?.type === "special")
+    ?? (activities.length > 1 ? activities.find(a => !a.activation?.type) : null)
+    ?? activities[0] ?? null;
 }
 
 /** dnd5e.postUseActivity, on the caster's client: tag a lingering spell's placed area. */
@@ -169,7 +174,7 @@ async function runAreaTrigger(activity, tokenDoc, usage) {
   const target = { actor: tokenDoc.actor.uuid, token: tokenDoc.uuid, name: tokenDoc.name };
   if (activity.type === "save") return automateSaves(activity, [target], usage, mode);
   // A damage-only area: roll it at the creature; apply it in full mode.
-  const rolls = await activity.rollDamage({}, { configure: false }, {
+  const rolls = await activity.rollDamage({ ...NO_DIALOG }, { configure: false }, {
     data: { system: { targets: [{ ...target, ac: tokenDoc.actor.system?.attributes?.ac?.value ?? null, img: tokenDoc.texture?.src }] } }
   });
   const message = rolls?.[0]?.parent;

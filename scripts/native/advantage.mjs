@@ -22,7 +22,8 @@
 // with exactly one target (dnd5e rolls once for all of them). The reasons are
 // shown in dnd5e's roll window and on the attack card.
 
-import { MODULE_ID, debug, escapeHTML, isAttackAdvantageEnabled, socket } from "./shared.mjs";
+import { MODULE_ID, debug, escapeHTML, isAttackAdvantageEnabled, isAutoCritsEnabled, isWeaponMasteryEnabled, socket } from "./shared.mjs";
+import { MASTERY_FLAG } from "./mastery.mjs";
 
 export const ATTACK_REASONS_FLAG = "attackReasons";
 const AC5E_ID = "automated-conditions-5e";
@@ -38,7 +39,8 @@ function ac5eSetting(key) {
 export function ac5eCovers() {
   if (!game.modules.get(AC5E_ID)?.active) return {};
   const statuses = !!ac5eSetting("automateStatuses");
-  const range = new Set(ac5eSetting("autoRangeChecks") ?? []);
+  const rangeSetting = ac5eSetting("autoRangeChecks");
+  const range = new Set(rangeSetting && typeof rangeSetting[Symbol.iterator] === "function" && typeof rangeSetting !== "string" ? rangeSetting : []);
   return {
     statuses,
     dodging: statuses && !!ac5eSetting("expandedConditions"),
@@ -261,12 +263,31 @@ export function attackReasons(activity, config = {}) {
   if (targetActor && effectsFrom(targetActor, "faerie-fire").length) advantage.push("Faerie Fire");
   const bolt = targetActor ? effectsFrom(targetActor, "guiding-bolt")[0] : null;
   if (bolt) { advantage.push("Guiding Bolt"); consume.push(bolt.uuid); }
+  addMasteryReasons(fx, { advantage, disadvantage, consume });
   if (!covers.heavy && fx.item?.type === "weapon" && fx.item.system?.properties?.has?.("hvy")) {
     const reason = heavyWeaponReason(fx);
     if (reason) disadvantage.push(reason);
   }
 
   return { advantage, disadvantage, cancel, consume };
+}
+
+/** Weapon Mastery marks (mastery.mjs): Sap on the attacker, Vex against this target. Used up by the attack. */
+function addMasteryReasons(fx, { advantage, disadvantage, consume }) {
+  const masteryOf = (effect) => effect.disabled ? null : effect.getFlag?.(MODULE_ID, MASTERY_FLAG);
+  const effects = [...(fx.actor?.effects ?? [])];
+  const sapped = effects.find(e => masteryOf(e)?.kind === "sap");
+  if (sapped) { disadvantage.push("Sapped"); consume.push(sapped.uuid); }
+  const vexing = fx.target ? effects.find(e => masteryOf(e)?.kind === "vex" && masteryOf(e).target === fx.target.uuid) : null;
+  if (vexing) { advantage.push("Vex"); consume.push(vexing.uuid); }
+}
+
+/** Only the Weapon Mastery reasons (when the advantage setting is off but Weapon Mastery is on). */
+export function masteryReasons(activity, config = {}) {
+  const fx = attackFacts(activity, config);
+  const reasons = { advantage: [], disadvantage: [], cancel: null, consume: [] };
+  addMasteryReasons(fx, reasons);
+  return reasons;
 }
 
 /** 2014: Small or Tiny wielders. 2024: Strength (melee) / Dexterity (ranged) below 13. */
@@ -289,20 +310,74 @@ function heavyWeaponReason(fx) {
  * Returns false only to cancel.
  */
 export function onPreRollAttack(config, dialog, message) {
-  if (!isAttackAdvantageEnabled()) return;
+  const full = isAttackAdvantageEnabled();
+  if (!full && !isWeaponMasteryEnabled()) return;
   const activity = config?.subject;
   if (activity?.type !== "attack") return;
   let reasons;
-  try { reasons = attackReasons(activity, config); } catch (err) { console.error(`[${MODULE_ID}] attack reasons:`, err); return; }
+  try { reasons = full ? attackReasons(activity, config) : masteryReasons(activity, config); }
+  catch (err) { console.error(`[${MODULE_ID}] attack reasons:`, err); return; }
   if (reasons.cancel) {
     ui.notifications?.warn(`Luck Dice Automation: ${reasons.cancel}`);
     return false;
   }
-  if (reasons.advantage.length) config.advantage = true;
-  if (reasons.disadvantage.length) config.disadvantage = true;
   if (!reasons.advantage.length && !reasons.disadvantage.length) return;
+
+  // Combine with what's already on the roll: Automated Conditions 5e's verdict (it decides in
+  // dnd5e.preRollAttack, just before this, and writes a normal roll as advantage + disadvantage, so
+  // its own record of its sources is read instead), or dnd5e's own sources (e.g. Poisoned).
+  // Any advantage plus any disadvantage is a normal roll.
+  const roll0 = config.rolls?.[0]?.options ?? {};
+  const ac5e = game.modules.get(AC5E_ID)?.active ? roll0[AC5E_ID] : null;
+  const priorAdvantage = ac5e ? !!ac5e.hasTransitAdvantage : !!(roll0.advantage || config.advantage);
+  const priorDisadvantage = ac5e ? !!ac5e.hasTransitDisadvantage : !!(roll0.disadvantage || config.disadvantage);
+  const hasAdvantage = priorAdvantage || reasons.advantage.length > 0;
+  const hasDisadvantage = priorDisadvantage || reasons.disadvantage.length > 0;
+  const modes = CONFIG.Dice.D20Roll?.ADV_MODE ?? { NORMAL: 0, ADVANTAGE: 1, DISADVANTAGE: -1 };
+  const finalMode = hasAdvantage && !hasDisadvantage ? modes.ADVANTAGE : hasDisadvantage && !hasAdvantage ? modes.DISADVANTAGE : modes.NORMAL;
+  config.advantage = hasAdvantage;
+  config.disadvantage = hasDisadvantage;
+  for (const roll of config.rolls ?? []) {
+    roll.options ??= {};
+    roll.options.advantage = hasAdvantage;
+    roll.options.disadvantage = hasDisadvantage;
+  }
+  if (dialog) {
+    dialog.options ??= {};
+    dialog.options.defaultButton = finalMode === modes.ADVANTAGE ? "advantage" : finalMode === modes.DISADVANTAGE ? "disadvantage" : "normal";
+  }
+  reasons.finalMode = finalMode;
+  ensureFinalModeHook();
   if (message) foundry.utils.setProperty(message, `data.flags.${MODULE_ID}.${ATTACK_REASONS_FLAG}`, reasons);
-  debug(`attack reasons: +[${reasons.advantage.join(", ")}] −[${reasons.disadvantage.join(", ")}]`);
+  debug(`attack reasons: +[${reasons.advantage.join(", ")}] −[${reasons.disadvantage.join(", ")}] → mode ${finalMode}`);
+}
+
+let finalModeHookRegistered = false;
+/**
+ * Registered on the first attack — after every module's setup, so after Automated
+ * Conditions 5e's own dnd5e.postRollConfiguration handler, which re-applies its verdict
+ * to the built roll. This one runs last and keeps the combined verdict.
+ */
+function ensureFinalModeHook() {
+  if (finalModeHookRegistered) return;
+  finalModeHookRegistered = true;
+  Hooks.on("dnd5e.postRollConfiguration", applyFinalAttackMode);
+}
+
+/**
+ * dnd5e.postRollConfiguration: when the roll window was skipped, put the combined
+ * advantage / disadvantage on the built d20 (a choice made in the window stands).
+ */
+export function applyFinalAttackMode(rolls, config, dialog, message) {
+  const reasons = message?.data?.flags?.[MODULE_ID]?.[ATTACK_REASONS_FLAG];
+  if (!reasons || typeof reasons.finalMode !== "number" || dialog?.configure !== false) return;
+  const roll = rolls?.[0];
+  const d20 = roll?.d20;
+  if (!d20?.applyAdvantage || roll.options?.advantageMode === reasons.finalMode) return;
+  d20.applyAdvantage(reasons.finalMode);
+  roll.options.advantageMode = reasons.finalMode;
+  roll.resetFormula?.();
+  debug(`attack mode kept: ${reasons.finalMode} (${AC5E_ID} active: ${!!game.modules.get(AC5E_ID)?.active})`);
 }
 
 /** A short line for the roll window and the card: "Advantage: a · b. Disadvantage: c." */
@@ -336,8 +411,31 @@ export async function consumeAttackMarks(message) {
   }
 }
 
-/** GM side: remove a mark an attack used up — only marks this module consumes. */
+/** GM side: remove a mark an attack used up — only marks this module consumes (Guiding Bolt, Sap, Vex). */
 export async function consumeAttackMarkGM({ uuid }) {
   const effect = await fromUuid(uuid);
-  if (effect && sourceItem(effect)?.system?.identifier === "guiding-bolt") await effect.delete();
+  if (!effect) return;
+  const mastery = effect.getFlag?.(MODULE_ID, MASTERY_FLAG)?.kind;
+  if (sourceItem(effect)?.system?.identifier === "guiding-bolt" || mastery === "sap" || mastery === "vex") await effect.delete();
+}
+
+/**
+ * dnd5e.preRollDamageV2 — the "autoCrits" setting: an attack's damage against
+ * creatures that are all Paralyzed or Unconscious, from within 5 ft, is critical.
+ * Left to AC5E when it automates statuses (it does the same). Never cancels.
+ */
+export function onPreRollDamage(config, dialog, message) {
+  if (!isAutoCritsEnabled() || config?.isCritical || ac5eCovers().statuses) return;
+  const activity = config?.subject;
+  if (activity?.type !== "attack") return;
+  const attacker = doc(activity.getUsageToken?.() ?? activity.actor?.getActiveTokens?.()?.[0]);
+  const descriptors = message?.data?.system?.targets;
+  const targets = Array.isArray(descriptors) && descriptors.length
+    ? descriptors.map(t => { try { return fromUuidSync(t.token, { strict: false }); } catch { return null; } }).filter(t => t?.actor)
+    : [...(game.user?.targets ?? [])].map(doc).filter(t => t?.actor);
+  if (!attacker || !targets.length) return;
+  const helpless = (t) => t.actor.statuses?.has?.("paralyzed") || t.actor.statuses?.has?.("unconscious");
+  if (!targets.every(t => helpless(t) && tokenDistance(attacker, t) <= adjacent())) return;
+  config.isCritical = true;
+  debug(`auto-crit: ${targets.map(t => t.name).join(", ")} helpless within 5 ft`);
 }

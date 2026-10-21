@@ -2,7 +2,8 @@
 // Applying a damage card to targets on the GM's client, recorded for the Applied row and Undo.
 
 import { isPrivateGMCard, useKey, playerTargets, recordOutcome, outcomeTitle } from "./outcome.mjs";
-import { MODULE_ID, getPrivateRollOutcome, APPLIED_FLAG, socket } from "./shared.mjs";
+import { MODULE_ID, getPrivateRollOutcome, getReactionPrompts, APPLIED_FLAG, socket } from "./shared.mjs";
+import { damageReactions, afterDamageReactions } from "./reactions.mjs";
 
 /** Apply a damage card to targets — directly as a GM, otherwise via the primary GM. */
 export async function requestApplyDamage(damageMessage, targets, { outcomeKey } = {}) {
@@ -55,10 +56,15 @@ export async function applyCardDamage({ messageId, targets, outcomeKey }) {
     const actor = (await fromUuid(target.token))?.actor ?? await fromUuid(target.actor);
     if (!actor?.applyDamage) continue;
     const multiplier = Number.isFinite(target.multiplier) ? target.multiplier : 1;
+    // Reactions to the incoming damage (Absorb Elements, Parry) — for a single instance of damage.
+    let cardDamages = damages, notes = [];
+    if (!Number.isFinite(target.hits) && getReactionPrompts() !== "off") {
+      ({ damages: cardDamages, notes } = await damageReactions(message, target, damages));
+    }
     // Each instance of damage this target takes: the whole card once, or per projectile.
     const instances = Number.isFinite(target.hits)
       ? Array.from({ length: Math.max(1, Math.floor(target.hits)) }, (_, i) => (target.luck && i === 0) ? damages : baseDamages)
-      : [damages];
+      : [cardDamages];
     let amount = 0;
     const before = sourceHP(actor);
     for (const instance of instances) {
@@ -70,11 +76,14 @@ export async function applyCardDamage({ messageId, targets, outcomeKey }) {
     applied.push({
       token: target.token, actor: actor.uuid, name: target.name ?? actor.name, amount, saved: !!target.saved,
       ...(hits > 1 ? { hits } : {}), ...(target.luck && baseDamages !== damages ? { luck: true } : {}),
+      ...(notes.length ? { reactions: notes } : {}),
       // What this application changed (before − after), for Undo. applyDamage changes exactly these.
       hp: { value: before.value - after.value, temp: before.temp - after.temp, tempmax: before.tempmax - after.tempmax }
     });
   }
   if (applied.length) await message.setFlag(MODULE_ID, APPLIED_FLAG, applied);
+  // Reactions to having been damaged (Hellish Rebuke) — not waited on.
+  if (applied.length && getReactionPrompts() !== "off") afterDamageReactions(message, applied).catch(err => console.error(`[${MODULE_ID}] after-damage reactions:`, err));
 
   // The GM's private damage card: players learn what happened to their characters.
   if (isPrivateGMCard(message) && getPrivateRollOutcome() === "outcome") {

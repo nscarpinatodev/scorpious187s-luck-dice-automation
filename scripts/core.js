@@ -431,6 +431,42 @@ function isAttackAdvantageEnabled() {
   try { return game.settings.get(MODULE_ID, "attackAdvantage"); } catch { return false; }
 }
 
+function getLegendaryResistance() {
+  try { return game.settings.get(MODULE_ID, "legendaryResistance"); } catch { return "off"; }
+}
+
+function isWeaponMasteryEnabled() {
+  try { return game.settings.get(MODULE_ID, "weaponMastery"); } catch { return false; }
+}
+
+function isAutoCritsEnabled() {
+  try { return game.settings.get(MODULE_ID, "autoCrits"); } catch { return false; }
+}
+
+function isOpportunityAttacksEnabled() {
+  try { return game.settings.get(MODULE_ID, "opportunityAttacks"); } catch { return false; }
+}
+
+function isRetaliationEnabled() {
+  try { return game.settings.get(MODULE_ID, "retaliation"); } catch { return false; }
+}
+
+function isDeathSavesEnabled() {
+  try { return game.settings.get(MODULE_ID, "deathSaves"); } catch { return false; }
+}
+
+function isClearInstantAreasEnabled() {
+  try { return game.settings.get(MODULE_ID, "clearInstantAreas"); } catch { return false; }
+}
+
+function isTurnSummaryEnabled() {
+  try { return game.settings.get(MODULE_ID, "turnSummary"); } catch { return false; }
+}
+
+function isWallSpellsEnabled() {
+  try { return game.settings.get(MODULE_ID, "wallSpells"); } catch { return false; }
+}
+
 function isRayAutomationEnabled() {
   try { return game.settings.get(MODULE_ID, "rayAutomation"); } catch { return false; }
 }
@@ -658,6 +694,71 @@ Hooks.once("init", () => {
     default: false
   });
 
+  game.settings.register(MODULE_ID, "legendaryResistance", {
+    name: "Legendary Resistance (without Midi-QoL)",
+    hint: "When an NPC with Legendary Resistance left fails a saving throw (including a concentration save), ask the GM " +
+          "whether to use it — or use it automatically. It turns the failure into a success through dnd5e, before the " +
+          "save automation applies damage or effects. Ignored when Midi-QoL is active.",
+    scope: "world",
+    config: true,
+    type: String,
+    choices: {
+      off:    "Off",
+      prompt: "Ask the GM",
+      auto:   "Use it automatically"
+    },
+    default: "off"
+  });
+
+  game.settings.register(MODULE_ID, "weaponMastery", {
+    name: "Weapon Mastery (without Midi-QoL)",
+    hint: "Carry out the 2024 Weapon Mastery property an attack used: Graze (damage on a miss), Topple (Constitution " +
+          "save or Prone), Sap (disadvantage on the target's next attack), Vex (advantage on your next attack against " +
+          "it), Slow (−10 ft speed) and Push (10 ft, if you choose). Cleave and Nick aren't automated. Ignored when Midi-QoL is active.",
+    scope: "world",
+    config: true,
+    type: Boolean,
+    default: false
+  });
+
+  game.settings.register(MODULE_ID, "autoCrits", {
+    name: "Automatic Critical Hits (without Midi-QoL)",
+    hint: "A hit on a Paralyzed or Unconscious creature from within 5 ft rolls critical damage. With Automated " +
+          "Conditions 5e automating statuses, it's left to AC5E (which does the same). Ignored when Midi-QoL is active.",
+    scope: "world",
+    config: true,
+    type: Boolean,
+    default: false
+  });
+
+  const nativeToggle = (key, name, hint) => game.settings.register(MODULE_ID, key, {
+    name, hint: hint + " Ignored when Midi-QoL is active.", scope: "world", config: true, type: Boolean, default: false
+  });
+  nativeToggle("opportunityAttacks", "Opportunity Attacks (without Midi-QoL)",
+    "When a creature moves out of an enemy's reach, offer the enemy an opportunity attack (its player, or the GM for NPCs), " +
+    "if it has its reaction. Not provoked when Disengaged (a status the module applies from Disengage features, or toggle it " +
+    "on the token HUD), teleporting, or being moved.");
+  nativeToggle("retaliation", "Retaliation Damage (without Midi-QoL)",
+    "Armor of Agathys (while its temporary HP last) and Fire Shield (within 5 ft) deal their damage back to a creature that " +
+    "hits the caster with a melee attack.");
+  nativeToggle("deathSaves", "Death Saves (without Midi-QoL)",
+    "Roll a dying character's death save at the start of its turn (on its player's client). Damage at 0 HP is a failed death " +
+    "save (two on a critical hit); damage at or past the HP maximum — or massive damage — is death. Luck Dice that turn a " +
+    "death save around are recorded properly.");
+  nativeToggle("clearInstantAreas", "Clear Spell Areas (without Midi-QoL)",
+    "Remove an instantaneous spell's placed area once the automation has resolved it (left to Flash Rolls 5e when its Remove " +
+    "Template option is on), and a concentration spell's area when its concentration ends. Lingering and wall spells' areas " +
+    "always go with their concentration, and are kept while it lasts (hold Shift to delete one anyway).");
+  nativeToggle("wallSpells", "Wall Spells Block (without Midi-QoL)",
+    "Turn the areas wall spells place into real walls: Wall of Force (movement), Wall of Stone (movement, sight, light, " +
+    "sound), Wall of Ice and Forcecage (movement), Prismatic Wall (sight and light). They go when the spell ends. A creature " +
+    "a new Wall of Force, Stone or Ice cuts through is pushed to the side the caster's player (or the GM) picks. Solid ones " +
+    "(Wall of Force, Stone, Ice; Forcecage's box) give total cover: no attacking or casting at creatures behind them, and " +
+    "area spells stop at them.");
+  nativeToggle("turnSummary", "Start-of-Turn Summary (without Midi-QoL)",
+    "When a creature's turn starts in combat, whisper its owners a summary: effects and their durations, concentration, saves " +
+    "due at the end of the turn, lingering areas it's in, death saves, legendary actions and resistances.");
+
   game.settings.register(MODULE_ID, "skipAttackDialog", {
     name: "Roll Attacks Without the Roll Window (without Midi-QoL)",
     hint: "Attacks roll straight away instead of opening dnd5e's attack roll window — after using a weapon or spell, " +
@@ -778,9 +879,10 @@ Hooks.once("init", () => {
 
   game.settings.register(MODULE_ID, "reactionPrompts", {
     name: "Reaction Prompts When Hit (without Midi-QoL)",
-    hint: "When an attack hits a creature that could react — Shield (when +5 AC would turn it into a miss) or Uncanny " +
-          "Dodge (half damage) — ask its player (or the GM) whether to use it. Shield is cast and the hit judged again; " +
-          "Uncanny Dodge halves the damage the attack automation applies. Ignored when Midi-QoL is active.",
+    hint: "Offer reactions when they'd matter — on a hit: Shield, Defensive Duelist, Uncanny Dodge, and allies' Cutting " +
+          "Words and Silvery Barbs; before damage: Absorb Elements, Parry; after damage: Hellish Rebuke. Asked of the " +
+          "creature's player (or the GM); each is used through dnd5e. One reaction per creature until its next turn " +
+          "(shared with opportunity attacks). Ignored when Midi-QoL is active.",
     scope: "world",
     config: true,
     type: String,
@@ -886,7 +988,7 @@ return {
   whisperLuckRegain, maybeRegainLuckDie,
   isLuckDiceEnabled, isInspirationEnabled, getAttackAutomation, getSaveAutomation, getPrivateRollOutcome,
   isEffectAutomationEnabled, isHealingAutomationEnabled,
-  isDamageOnlyAutomationEnabled, isConcentrationBreakEnabled, isConcentrationAutoRollEnabled, isOnHitRidersEnabled, isLingeringAreasEnabled, isRepeatSavesEnabled, getReactionPrompts, isSkipAttackDialogEnabled, isAttackAdvantageEnabled, isRayAutomationEnabled, getTargetConfirmation,
+  isDamageOnlyAutomationEnabled, isConcentrationBreakEnabled, isConcentrationAutoRollEnabled, isOnHitRidersEnabled, isLingeringAreasEnabled, isRepeatSavesEnabled, getReactionPrompts, isSkipAttackDialogEnabled, isAttackAdvantageEnabled, getLegendaryResistance, isWeaponMasteryEnabled, isAutoCritsEnabled, isOpportunityAttacksEnabled, isRetaliationEnabled, isDeathSavesEnabled, isClearInstantAreasEnabled, isTurnSummaryEnabled, isWallSpellsEnabled, isRayAutomationEnabled, getTargetConfirmation,
   actorHasInspiration, consumeInspiration, evaluateInspirationReroll,
   HISTORY_FLAG, diceFaces, renderLuckSection, requestRollActors,
   readCardHistory, updateRollCard, recordCardStep, finishCardHistory, cardReporter,

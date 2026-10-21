@@ -2,6 +2,7 @@
 // Who a use affects: the creatures in a placed area, choosing among them, and target confirmation.
 
 import { getTargetConfirmation, escapeHTML } from "./shared.mjs";
+import { behindBarrier, effectBarriers, areaOrigin } from "./walls.mjs";
 
 /**
  * The creatures inside an activity's placed area, filtered by what it affects
@@ -19,8 +20,12 @@ export function tokensInActivityArea(activity, regions) {
   if (type === "self") return caster ? [caster] : [];
 
   const fromSelf = activity.range?.units === "self";
+  // A solid barrier (Wall of Force…) stops the area's effect: who it cuts off from the area's origin is spared.
+  const barriers = effectBarriers(scene);
+  const origins = barriers.length ? regions.map(areaOrigin).filter(Boolean) : [];
   return scene.tokens.filter(token => {
     if (!token.actor || !regions.some(region => token.testInsideRegion(region))) return false;
+    if (origins.length && origins.every(o => behindBarrier(scene, o, token, barriers))) return false;
     if (caster && token.id === caster.id && fromSelf) return false;
     if (token.actor.statuses?.has("dead")) return false;
     if (token.hidden && !game.user.isGM) return false;
@@ -87,7 +92,7 @@ export function needsAttackConfirmation(activity, results) {
  * confirmed TokenDocuments, or null if cancelled / closed. Non-modal, so the
  * canvas stays usable while it's open.
  */
-export async function confirmTargets(activity, fallback = null) {
+export async function confirmTargets(activity, fallback = null, { hint } = {}) {
   const DialogV2 = foundry.applications.api?.DialogV2;
   if (!DialogV2 || !canvas?.ready) return fallback;
   let hookId = null;
@@ -112,7 +117,7 @@ export async function confirmTargets(activity, fallback = null) {
   const result = await DialogV2.wait({
     window:   { title: `${activity.item?.name ?? activity.name}: Confirm Targets` },
     position: { width: 320 },
-    content:  `<p>Target or untarget creatures on the canvas to change this list.</p>
+    content:  `<p>${escapeHTML(hint ?? "Target or untarget creatures on the canvas to change this list.")}</p>
       <ul class="lda-confirm-list" style="list-style:none;margin:0;padding:0"></ul>`,
     buttons: [
       { action: "ok", label: "Confirm", icon: "fa-solid fa-check", default: true,
@@ -121,6 +126,9 @@ export async function confirmTargets(activity, fallback = null) {
     ],
     render: (_event, dialog) => {
       const root = dialog.element;
+      // Keep Foundry's targeting keys (T, Shift-T…) working while this is open: a focused button in a form would
+      // otherwise swallow them (KeyboardManager#hasFocus).
+      root.querySelectorAll?.("button")?.forEach(button => { button.dataset.keyboardFocus = "false"; });
       root.addEventListener("click", (event) => {
         const button = event.target.closest?.("[data-lda-untarget]");
         if (!button) return;

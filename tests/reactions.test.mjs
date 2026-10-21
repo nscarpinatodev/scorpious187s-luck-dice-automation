@@ -96,12 +96,12 @@ test("declining, players-only mode, and one reaction until the creature's turn",
 
   choices = ["uncanny-dodge"];
   const payload = { token: rogue.token.document.uuid, actor: rogue.actor.uuid, options: ["uncanny-dodge"], total: 20, ac: 14 };
-  assert.deepEqual(await answerReaction(payload), { identifier: "uncanny-dodge" });
+  assert.equal((await answerReaction(payload))?.identifier, "uncanny-dodge");
   choices = ["uncanny-dodge"];
   assert.equal(await answerReaction(payload), null);                 // spent
   onTurnStartReaction({ scene }, { tokenId: rogue.token.id });
   choices = ["uncanny-dodge"];
-  assert.deepEqual(await answerReaction(payload), { identifier: "uncanny-dodge" });
+  assert.equal((await answerReaction(payload))?.identifier, "uncanny-dodge");
 });
 
 test("the setting off: nobody is asked", async () => {

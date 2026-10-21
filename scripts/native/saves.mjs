@@ -3,7 +3,8 @@
 
 import { requestApplyDamage } from "./apply.mjs";
 import { applySaveEffects } from "./effects.mjs";
-import { MODULE_ID, debug, promptChoice, getSaveAutomation, escapeHTML, pendingLuckDamage, socket, pendingLuckChecks, pendingSaveRequests, getPrimaryGM, activePlayerOwner, abilityLabel, resolveTarget } from "./shared.mjs";
+import { clearAreasForUse } from "./areas.mjs";
+import { MODULE_ID, debug, promptChoice, getSaveAutomation, escapeHTML, pendingLuckDamage, socket, pendingLuckChecks, pendingSaveRequests, getPrimaryGM, activePlayerOwner, abilityLabel, resolveTarget, NO_DIALOG } from "./shared.mjs";
 import { tokensInActivityArea, chooseAffected, regionsOf, needsConfirmation, confirmTargets } from "./targeting.mjs";
 
 // ── Save automation ───────────────────────────────────────────────────────────
@@ -38,27 +39,30 @@ export const noResults = (targets) => targets.map(t => ({ token: t.token, result
  * own save stays a normal card, where they see their roll, any Luck Dice spent,
  * and the result.
  */
-export async function rollAutomatedSave(target, { activityUuid, usageId, ability, dc, fastForward, link }) {
+export async function rollAutomatedSave(target, { activityUuid, activityName, usageId, ability, dc, fastForward, link }) {
   const { tokenDoc, actor } = await resolveTarget(target);
   if (!actor?.rollSavingThrow) return null;
   const activity = activityUuid ? await fromUuid(activityUuid) : null;
 
-  const rollData = { ability, target: dc };
+  const rollData = { ability, target: dc, ...(fastForward ? NO_DIALOG : {}) };
   if (activity?.save?.bonus) {
     const bonus     = CONFIG.Dice.BasicRoll.replaceFormulaData(activity.save.bonus, activity.getRollData(), { missing: 0 });
     const bonusData = CONFIG.Dice.BasicRoll.constructParts({ activityBonus: bonus });
     if (bonusData.parts.length) rollData.rolls = [bonusData];
   }
   const speaker = ChatMessage.getSpeaker({ actor, scene: tokenDoc?.parent ?? canvas.scene, token: tokenDoc });
+  // Name what the save is for: "Fireball — Dexterity Saving Throw", "Weapon Mastery: Topple (Maul) — …".
+  const flavor = activityName ? `${activityName} — ${abilityLabel(ability)} Saving Throw` : undefined;
   const rolls = await actor.rollSavingThrow(rollData, fastForward ? { configure: false } : {}, {
-    data: { speaker, system: { ...(activity?.messageSources ?? {}), ...(link ? { origin: usageId } : {}) } }
+    data: { speaker, ...(flavor ? { flavor } : {}), system: { ...(activity?.messageSources ?? {}), ...(link ? { origin: usageId } : {}) } }
   });
   const message = rolls?.[0]?.parent;
   if (!message) return null;
 
   await pendingLuckChecks.get(message.id);
   const final = message.rolls[0];
-  return { passed: !!final?.isSuccess, total: Number(final?.total ?? 0) };
+  // A save turned into a success by Legendary Resistance counts as passed.
+  return { passed: !!final?.isSuccess || !!message.system?.resisted, total: Number(final?.total ?? 0) };
 }
 
 /**
@@ -232,6 +236,7 @@ export async function automateSaves(activity, targets, usage, mode = getSaveAuto
   const outcome = new Map((await Promise.all(requests)).flat().map(r => [r.token, r.result]));
   await applySaveDamage(activity, targets, outcome, usage);
   if (usage) await applySaveEffects(activity, usage, targets, outcome);
+  if (usage) await clearAreasForUse(usage.id);
 }
 
 /**
@@ -250,7 +255,7 @@ export async function applySaveDamage(activity, targets, outcome, usage = null) 
   }
   if (!rolled.length) return;
 
-  const rolls = await activity.rollDamage({}, { configure: false });
+  const rolls = await activity.rollDamage({ ...NO_DIALOG }, { configure: false });
   const damageMessage = rolls?.[0]?.parent;
   if (!damageMessage) return;
   await pendingLuckDamage.get(damageMessage.id);

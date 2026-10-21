@@ -11,7 +11,7 @@
 // failure), and the prompt card is removed — by the roller when they may delete
 // it, otherwise by the primary GM.
 
-import { MODULE_ID, debug, isConcentrationAutoRollEnabled, socket, getPrimaryGM, activePlayerOwner } from "./shared.mjs";
+import { MODULE_ID, debug, isConcentrationAutoRollEnabled, socket, getPrimaryGM, activePlayerOwner, NO_DIALOG } from "./shared.mjs";
 
 // Prompt cards already handled on this client, by id.
 const handledPrompts = new Set();
@@ -41,7 +41,7 @@ export async function onConcentrationPrompt(message) {
   handledPrompts.add(message.id);
 
   debug(`concentration: auto-rolling ${actor.name}'s check, DC ${button.dc}`);
-  const config = { target: button.dc };
+  const config = { target: button.dc, ...NO_DIALOG };
   if (button.ability) config.ability = button.ability;
   const rolls = await actor.rollConcentration(config, { configure: false });
   if (!rolls?.length) { handledPrompts.delete(message.id); return; } // cancelled: leave the button

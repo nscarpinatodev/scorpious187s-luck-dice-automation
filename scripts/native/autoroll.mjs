@@ -2,6 +2,7 @@
 // Activities dnd5e rolls right after use (healing, damage-only): targeting and applying them.
 
 import { requestApplyDamage } from "./apply.mjs";
+import { clearAreasForUse } from "./areas.mjs";
 import { projectileCount, assignProjectiles } from "./projectiles.mjs";
 import { MODULE_ID, debug, isHealingAutomationEnabled, isDamageOnlyAutomationEnabled, pendingLuckDamage } from "./shared.mjs";
 import { tokensInActivityArea, regionsOf, confirmTargets } from "./targeting.mjs";
@@ -65,6 +66,7 @@ export async function applyAutoRolledCard(message, activity) {
     if (!targets?.length) return;
   }
   await requestApplyDamage(message, targets);
+  await clearAreasForUse(message.getOriginatingMessage?.()?.id);
 }
 
 /** What dnd5e does to the item before its own follow-up roll: note the resources this use consumed. */
@@ -97,4 +99,14 @@ async function confirmAndAttack(activity, usageConfig, results) {
   if (!await confirmTargets(activity)) return;
   applyConsumedFlag(activity, results);
   await activity.rollAttack({ event: usageConfig?.event }, {}, { data: { system: { origin: results?.message?.id } } });
+}
+
+/**
+ * dnd5e.preRollDamageV2 — healing and damage-only activities the module applies
+ * roll without dnd5e's damage window (the critical key still works). Never cancels.
+ */
+export function skipAutoRolledDamageDialog(config, dialog) {
+  const activity = config?.subject;
+  if (!dialog || !(activity?.type === "heal" || activity?.type === "damage") || !autoRolledEnabled(activity)) return;
+  dialog.configure ??= false;
 }

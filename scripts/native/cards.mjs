@@ -4,6 +4,7 @@
 import { RIDERS_FLAG } from "./riders.mjs";
 import { REACTIONS_FLAG } from "./reactions.mjs";
 import { ATTACK_REASONS_FLAG, reasonsHTML } from "./advantage.mjs";
+import { MASTERY_RESULT_FLAG } from "./mastery.mjs";
 import { MODULE_ID, HISTORY_FLAG, renderLuckSection, APPLIED_FLAG, escapeHTML, APPLIED_EFFECTS_FLAG } from "./shared.mjs";
 import { undoAppliedDamage, undoAppliedEffects } from "./undo.mjs";
 
@@ -54,7 +55,7 @@ export const UNDO_NOTE = "Doesn't reverse dnd5e's own follow-ups: a concentratio
  */
 export function injectNativeHistory(message, html) {
   if (!(html instanceof HTMLElement) || html.querySelector(".midi-results")) return;
-  html.querySelectorAll(".lda-luck-history, .lda-attack-reasons-row, .lda-riders, .lda-reactions, .lda-applied-damage, .lda-applied-effects").forEach(el => el.remove());
+  html.querySelectorAll(".lda-luck-history, .lda-attack-reasons-row, .lda-mastery, .lda-riders, .lda-reactions, .lda-applied-damage, .lda-applied-effects").forEach(el => el.remove());
   if (!message.isContentVisible) return;
 
   const blocks  = [];
@@ -64,6 +65,8 @@ export function injectNativeHistory(message, html) {
   }
   const attackReasons = message.getFlag?.(MODULE_ID, ATTACK_REASONS_FLAG);
   if (attackReasons?.advantage?.length || attackReasons?.disadvantage?.length) blocks.push(renderAttackReasonsSection(attackReasons));
+  const mastery = message.getFlag?.(MODULE_ID, MASTERY_RESULT_FLAG);
+  if (mastery?.text) blocks.push(renderMasterySection(mastery));
   const reactions = message.getFlag?.(MODULE_ID, REACTIONS_FLAG);
   if (reactions?.length) blocks.push(renderReactionsSection(reactions));
   const riders = message.getFlag?.(MODULE_ID, RIDERS_FLAG);
@@ -154,6 +157,17 @@ export function renderAttackReasonsSection(reasons) {
   return wrapper.firstElementChild;
 }
 
+/** "Mastery (Topple)  DC 13 — Goblin knocked Prone" as a card row. */
+export function renderMasterySection(mastery) {
+  const wrapper = document.createElement("div");
+  wrapper.innerHTML = `
+    <section class="icon-row lda-mastery" style="display:flex;align-items:flex-start;gap:6px;margin:2px 0">
+      <i class="fa-fw fa-solid fa-khanda" aria-label="Weapon mastery" style="margin-top:2px;opacity:0.8"></i>
+      <div style="flex:1;min-width:0"><strong>Mastery (${escapeHTML(mastery.label)})</strong> ${escapeHTML(mastery.text)}</div>
+    </section>`.trim();
+  return wrapper.firstElementChild;
+}
+
 /** A row heading's note: " (undone)" once all of it is, " (partly undone)" for some. */
 export function undoneLabel(applied) {
   const count = applied.filter(a => a.undone).length;
@@ -172,7 +186,7 @@ export function renderAppliedSection(applied) {
   const canUndo   = game.user.isGM && applied.some(undoable);
   const perTarget = canUndo && applied.length > 1;
   const parts = applied.map((a, i) =>
-    `<span style="white-space:nowrap"><span style="${a.undone ? "text-decoration:line-through;opacity:0.55" : ""}">${escapeHTML(a.name)} <strong>${a.amount < 0 ? `+${-a.amount}` : a.amount}</strong>${a.hits > 1 || a.luck ? ` <span style="opacity:0.7">(${[a.hits > 1 ? `×${a.hits}` : "", a.luck ? "Luck Dice on one" : ""].filter(Boolean).join(", ")})</span>` : ""}${a.saved ? ` <span style="opacity:0.7">(saved)</span>` : ""}</span>${
+    `<span style="white-space:nowrap"><span style="${a.undone ? "text-decoration:line-through;opacity:0.55" : ""}">${escapeHTML(a.name)} <strong>${a.amount < 0 ? `+${-a.amount}` : a.amount}</strong>${a.hits > 1 || a.luck ? ` <span style="opacity:0.7">(${[a.hits > 1 ? `×${a.hits}` : "", a.luck ? "Luck Dice on one" : ""].filter(Boolean).join(", ")})</span>` : ""}${a.saved ? ` <span style="opacity:0.7">(saved)</span>` : ""}${a.reactions?.length ? ` <span style="opacity:0.7">(${a.reactions.map(escapeHTML).join(", ")})</span>` : ""}</span>${
       perTarget && undoable(a) ? undoButton(`Give back ${a.name}'s HP / temp HP only. ${UNDO_NOTE}`, { index: i }) : ""}</span>`);
   const wrapper = document.createElement("div");
   wrapper.innerHTML = `

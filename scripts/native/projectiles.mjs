@@ -3,7 +3,7 @@
 
 import { applyConsumedFlag } from "./autoroll.mjs";
 import { debug, isRayAutomationEnabled, escapeHTML, pendingAttacks } from "./shared.mjs";
-import { needsConfirmation, confirmTargets } from "./targeting.mjs";
+import { confirmTargets } from "./targeting.mjs";
 
 // ── Projectile spells ─────────────────────────────────────────────────────────
 // dnd5e rolls one of a spell's projectiles and keeps no count of them.
@@ -118,7 +118,9 @@ export async function fireRays(activity, usageConfig, results, rays) {
   const usage = results?.message;
   const name  = activity.item?.name ?? activity.name;
   let tokens  = [...game.user.targets].map(t => t.document);
-  if (needsConfirmation(activity, results)) tokens = await confirmTargets(activity, tokens);
+  // Always confirm the targets for rays: Automated Conditions 5e (with its targeting rule) only lets an attack
+  // be used at a single target, so the others are targeted here, after the cast.
+  tokens = await confirmTargets(activity, tokens, { hint: "Target each creature to fire at (hold Shift to target more than one), then Confirm." });
   tokens = (tokens ?? []).filter(t => t?.actor && t.parent === canvas.scene);
   if (!tokens.length) {
     ui.notifications?.info(`Luck Dice Automation: no targets for ${name} — roll its attacks from the card.`);

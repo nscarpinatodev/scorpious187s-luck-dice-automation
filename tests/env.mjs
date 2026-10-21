@@ -9,7 +9,7 @@ const MODULE_ID = "scorpious187s-luck-dice-automation";
 export const settings = {
   attackAutomation: "off", saveAutomation: "off", privateRollOutcome: "private",
   effectAutomation: false, healingAutomation: false, damageOnlyAutomation: false,
-  concentrationBreak: false, concentrationAutoRoll: false, onHitRiders: false, lingeringAreas: false, repeatSaves: false, reactionPrompts: "off", skipAttackDialog: false, attackAdvantage: false, rayAutomation: false, targetConfirmation: "off",
+  concentrationBreak: false, concentrationAutoRoll: false, onHitRiders: false, lingeringAreas: false, repeatSaves: false, reactionPrompts: "off", skipAttackDialog: false, attackAdvantage: false, legendaryResistance: "off", weaponMastery: false, autoCrits: false, opportunityAttacks: false, retaliation: false, deathSaves: false, clearInstantAreas: false, turnSummary: false, wallSpells: false, rayAutomation: false, targetConfirmation: "off",
   luckDice: true, inspiration: false,
   dnd5e: { disableConcentration: false, allowPlayerDamageTray: false }
 };
@@ -120,6 +120,17 @@ class BasicRoll {
 }
 class DamageRoll extends BasicRoll {}
 class D20Roll extends BasicRoll {}
+/** Dice results the fake Roll hands out, in order (numbers in a formula are used as is). */
+export const rollResults = [];
+class FakeRoll {
+  constructor(formula = "0", data = {}, options = {}) { this.formula = formula; this.data = data; this.options = options; }
+  async evaluate() {
+    const n = Number(this.formula);
+    this.total = Number.isFinite(n) ? n : (rollResults.shift() ?? 1);
+    this._evaluated = true;
+    return this;
+  }
+}
 /** A damage roll with a fixed total. */
 export const damageRoll = (total, options = {}) => new DamageRoll("", {}, { type: "force", total, ...options });
 
@@ -152,13 +163,17 @@ const LDA = {
   },
   actorHasLuckDice: () => false, actorHasInspiration: () => false,
   promptChoice: (...args) => prompts.choice(...args), promptSlider: (...args) => prompts.slider(...args), getKeptD20Result: (r) => r?.d20 ?? null,
-  spendDiceFromPools: async () => 0, buildDiceAvailableHTML: () => "", combineRolls: (a) => a, diceFaces: () => [],
+  spendDiceFromPools: async () => 0, buildDiceAvailableHTML: () => "", diceFaces: () => [],
+  combineRolls: (a, b) => Object.assign(Object.create(Object.getPrototypeOf(a ?? {})), a, { total: Number(a?.total ?? 0) + Number(b?.total ?? 0), combined: true }),
+  evaluateReroll: async (roll) => ({ ...roll, total: rollResults.shift() ?? roll.total, rerolled: true }),
   renderLuckSection: () => ({}), requestRollActors: new Set(),
   isLuckDiceEnabled: () => settings.luckDice, isInspirationEnabled: () => settings.inspiration,
   getAttackAutomation: () => settings.attackAutomation, getSaveAutomation: () => settings.saveAutomation,
   getPrivateRollOutcome: () => settings.privateRollOutcome,
   isEffectAutomationEnabled: () => settings.effectAutomation, isHealingAutomationEnabled: () => settings.healingAutomation,
-  isDamageOnlyAutomationEnabled: () => settings.damageOnlyAutomation, isConcentrationBreakEnabled: () => settings.concentrationBreak, isConcentrationAutoRollEnabled: () => settings.concentrationAutoRoll, isOnHitRidersEnabled: () => settings.onHitRiders, isLingeringAreasEnabled: () => settings.lingeringAreas, isRepeatSavesEnabled: () => settings.repeatSaves, getReactionPrompts: () => settings.reactionPrompts, isSkipAttackDialogEnabled: () => settings.skipAttackDialog, isAttackAdvantageEnabled: () => settings.attackAdvantage,
+  isDamageOnlyAutomationEnabled: () => settings.damageOnlyAutomation, isConcentrationBreakEnabled: () => settings.concentrationBreak, isConcentrationAutoRollEnabled: () => settings.concentrationAutoRoll, isOnHitRidersEnabled: () => settings.onHitRiders, isLingeringAreasEnabled: () => settings.lingeringAreas, isRepeatSavesEnabled: () => settings.repeatSaves, getReactionPrompts: () => settings.reactionPrompts, isSkipAttackDialogEnabled: () => settings.skipAttackDialog, isAttackAdvantageEnabled: () => settings.attackAdvantage, getLegendaryResistance: () => settings.legendaryResistance,
+  isWeaponMasteryEnabled: () => settings.weaponMastery, isAutoCritsEnabled: () => settings.autoCrits,
+  isOpportunityAttacksEnabled: () => settings.opportunityAttacks, isRetaliationEnabled: () => settings.retaliation, isDeathSavesEnabled: () => settings.deathSaves, isClearInstantAreasEnabled: () => settings.clearInstantAreas, isTurnSummaryEnabled: () => settings.turnSummary, isWallSpellsEnabled: () => settings.wallSpells,
   isRayAutomationEnabled: () => settings.rayAutomation, getTargetConfirmation: () => settings.targetConfirmation,
   readCardHistory: () => ({ entries: [] }), updateRollCard: async () => {}, recordCardStep: async () => {},
   finishCardHistory: async () => {}, cardReporter: () => noop,
@@ -169,6 +184,7 @@ const LDA = {
 const user = { id: "gm1", name: "GM", isGM: true, active: true, targets: new Set() };
 Object.assign(globalThis, {
   window: globalThis,
+  Roll: FakeRoll,
   LDA,
   Hooks: hooks,
   fromUuid: async (uuid) => uuids.get(uuid) ?? null,
@@ -176,6 +192,7 @@ Object.assign(globalThis, {
   foundry: {
     utils: {
       deepClone: (o) => o === undefined ? o : structuredClone(o),
+      getProperty: (object, key) => key.split(".").reduce((o, k) => o?.[k], object),
       setProperty: (object, key, value) => {
         const parts = key.split("."); let target = object;
         for (const p of parts.slice(0, -1)) target = (target[p] ??= {});
@@ -236,6 +253,7 @@ export function reset() {
   user.isGM = true;
   user.targets = new Set();
   dialogs.length = 0;
+  rollResults.length = 0;
   prompts.choice = async () => null;
   prompts.slider = async () => 0;
   notes.length = 0;
@@ -247,7 +265,7 @@ export function reset() {
   Object.assign(settings, {
     attackAutomation: "off", saveAutomation: "off", privateRollOutcome: "private",
     effectAutomation: false, healingAutomation: false, damageOnlyAutomation: false,
-    concentrationBreak: false, concentrationAutoRoll: false, onHitRiders: false, lingeringAreas: false, repeatSaves: false, reactionPrompts: "off", skipAttackDialog: false, attackAdvantage: false, rayAutomation: false, targetConfirmation: "off"
+    concentrationBreak: false, concentrationAutoRoll: false, onHitRiders: false, lingeringAreas: false, repeatSaves: false, reactionPrompts: "off", skipAttackDialog: false, attackAdvantage: false, legendaryResistance: "off", weaponMastery: false, autoCrits: false, opportunityAttacks: false, retaliation: false, deathSaves: false, clearInstantAreas: false, turnSummary: false, wallSpells: false, rayAutomation: false, targetConfirmation: "off"
   });
   settings.dnd5e.disableConcentration = false;
 }
@@ -255,4 +273,4 @@ export function reset() {
 /** Let pending promise callbacks and timers run. */
 export const flush = (ms = 0) => new Promise(r => setTimeout(r, ms));
 
-export const env = { prompts, settings, hooks, uuids, scene, makeToken, targetLog, dialogs, notes, messages, damageRoll, reset, flush, user };
+export const env = { rollResults, prompts, settings, hooks, uuids, scene, makeToken, targetLog, dialogs, notes, messages, damageRoll, reset, flush, user };

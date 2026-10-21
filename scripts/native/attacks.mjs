@@ -6,7 +6,10 @@ import { applyHitEffects } from "./effects.mjs";
 import { handlePrivateAttack } from "./outcome.mjs";
 import { addOnHitRiders } from "./riders.mjs";
 import { offerReactions, reactionMultiplier } from "./reactions.mjs";
-import { LDA, MODULE_ID, LUCK_DICE_ITEM_NAME, IMPACT_DICE_ITEM_NAME, clamp, debug, getDiceUses, actorHasLuckDice, promptChoice, promptSlider, getKeptD20Result, spendDiceFromPools, buildDiceAvailableHTML, isLuckDiceEnabled, combineRolls, HISTORY_FLAG, diceFaces, getAttackAutomation, readCardHistory, updateRollCard, recordCardStep, finishCardHistory, escapeHTML, canUseLuck, pendingLuckDamage, isSkipAttackDialogEnabled } from "./shared.mjs";
+import { applyWeaponMastery } from "./mastery.mjs";
+import { autoRolledEnabled } from "./autoroll.mjs";
+import { applyRetaliation } from "./retaliation.mjs";
+import { LDA, MODULE_ID, LUCK_DICE_ITEM_NAME, IMPACT_DICE_ITEM_NAME, clamp, debug, getDiceUses, actorHasLuckDice, promptChoice, promptSlider, getKeptD20Result, spendDiceFromPools, buildDiceAvailableHTML, isLuckDiceEnabled, combineRolls, HISTORY_FLAG, diceFaces, getAttackAutomation, readCardHistory, updateRollCard, recordCardStep, finishCardHistory, escapeHTML, canUseLuck, pendingLuckDamage, isSkipAttackDialogEnabled, NO_DIALOG } from "./shared.mjs";
 
 // ── Attacks ───────────────────────────────────────────────────────────────────
 
@@ -79,8 +82,10 @@ export async function onAttackRolled(rolls, data) {
     await offerReactions(message, activity);
     await syncAutomatedAnimations(message, activity);
     await handlePrivateAttack(message, activity);
+    await applyRetaliation(message, activity); // before the damage: Armor of Agathys needs its temp HP standing
     await applyHitEffects(message, activity);
     await automateAttack(message, activity);
+    await applyWeaponMastery(message, activity);
   } catch (err) {
     console.error(`[${MODULE_ID}] native attack error:`, err);
   }
@@ -243,10 +248,30 @@ export function skipAttackDialog(config, dialog) {
   if (!isSkipAttackDialogEnabled() || !dialog) return;
   const optins = ac5eOptins(config);
   if (optins.length) {
-    debug(`skip attack window: AC5E has ${optins.length} opt-in choice(s) — opening the window`);
+    console.log(`[${MODULE_ID}] skip attack window: kept open for Automated Conditions 5e's opt-in choice(s): ${
+      optins.map(o => `${o.label ?? o.name ?? o.id}${o.forceOptin ? " (required)" : o.preselected ? " (preselected)" : ""}`).join(", ")}`);
     return;
   }
   dialog.configure ??= false;
+}
+
+/**
+ * dnd5e.preRollV2 — called after every type-specific preRoll hook, so after other modules have had their say
+ * (Flash Rolls 5e turns the window back on for actors with an active player owner). The module's own
+ * window-less rolls stay window-less; attacks with "skipAttackDialog" and damage the module applies (healing,
+ * damage-only activities) roll without the window. AC5E's opt-in choices still open an attack's window.
+ * Never cancels.
+ */
+export function finalRollDialog(config, dialog) {
+  if (!dialog) return;
+  if (config?.[MODULE_ID]?.noDialog) { dialog.configure = false; return; }
+  const hooks = config?.hookNames ?? [];
+  const subject = config?.subject;
+  if (hooks.includes("attack") && subject?.type === "attack" && isSkipAttackDialogEnabled() && !ac5eOptins(config).length) {
+    dialog.configure = false;
+  } else if (hooks.includes("damage") && (subject?.type === "heal" || subject?.type === "damage") && autoRolledEnabled(subject)) {
+    dialog.configure = false;
+  }
 }
 
 /** Whether the activity has any damage to roll. */
@@ -260,7 +285,7 @@ export async function rollAttackDamage(attackMessage, activity, { fastForward })
   const isCritical = !!attackMessage.rolls[0]?.isCritical;
   const dialog = fastForward ? { configure: false }
     : isCritical ? { options: { defaultButton: "critical" } } : {};
-  const rolls = await activity.rollDamage({ ability, ammunition, attackMode, isCritical }, dialog);
+  const rolls = await activity.rollDamage({ ability, ammunition, attackMode, isCritical, ...(fastForward ? NO_DIALOG : {}) }, dialog);
   return rolls?.[0]?.parent ?? null;
 }
 

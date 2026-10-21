@@ -68,3 +68,15 @@ test("save targets with confirmation: the area's creatures, then the confirmed l
   dialogs.push(async () => "cancel");
   assert.equal(await resolveSaveTargets({ type: "save" }, { templates: [region(["a"])] }), null);
 });
+
+test("the confirm window leaves Foundry's targeting keys working (its buttons don't take keyboard focus)", async () => {
+  const buttons = [{ dataset: {} }, { dataset: {} }];
+  const original = foundry.applications.api.DialogV2.wait;
+  foundry.applications.api.DialogV2.wait = async (config) => {
+    const root = { querySelectorAll: (q) => q === "button" ? buttons : [], querySelector: () => null, addEventListener: () => {} };
+    config.render({}, { element: root });
+    return null;
+  };
+  try { await confirmTargets({ name: "Spell" }); } finally { foundry.applications.api.DialogV2.wait = original; }
+  assert.deepEqual(buttons.map(b => b.dataset.keyboardFocus), ["false", "false"]);
+});
