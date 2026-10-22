@@ -9,6 +9,7 @@ import { offerReactions, reactionMultiplier } from "./reactions.mjs";
 import { applyWeaponMastery } from "./mastery.mjs";
 import { autoRolledEnabled } from "./autoroll.mjs";
 import { applyRetaliation } from "./retaliation.mjs";
+import { rollExtras } from "./boosts.mjs";
 import { LDA, MODULE_ID, LUCK_DICE_ITEM_NAME, IMPACT_DICE_ITEM_NAME, clamp, debug, getDiceUses, actorHasLuckDice, promptChoice, promptSlider, getKeptD20Result, spendDiceFromPools, buildDiceAvailableHTML, isLuckDiceEnabled, combineRolls, HISTORY_FLAG, diceFaces, getAttackAutomation, readCardHistory, updateRollCard, recordCardStep, finishCardHistory, escapeHTML, canUseLuck, pendingLuckDamage, isSkipAttackDialogEnabled, NO_DIALOG } from "./shared.mjs";
 
 // ── Attacks ───────────────────────────────────────────────────────────────────
@@ -51,7 +52,15 @@ export function nativeAttack(message, actor) {
       });
       return bonus;
     },
-    finish: () => finishCardHistory(message, attackHitState(message) === true ? "hit" : "miss")
+    finish: () => finishCardHistory(message, attackHitState(message) === true ? "hit" : "miss"),
+    // Bardic Inspiration, Lucky (boosts.mjs): offered with the Luck Dice.
+    extras: rollExtras(actor, "attack"),
+    roll: () => current(),
+    async applyExtra(out) {
+      const before = this.total();
+      const roll   = out.roll ?? combineRolls(current(), out.bonusRoll);
+      await recordCardStep(message, roll, before, { kind: "attack", label: out.label, total: roll.total, detail: out.detail });
+    }
   };
 }
 
@@ -68,11 +77,11 @@ export async function onAttackRolled(rolls, data) {
     const actor    = activity?.actor;
     if (!message || !activity) return;
 
-    if (canUseLuck(actor)) {
-      const hitState = attackHitState(message);
-      debug(`native attack: ${actor.name} total=${roll.total} hitState=${hitState}`);
-      if (hitState === false) {
-        const attack = nativeAttack(message, actor);
+    const hitState = attackHitState(message);
+    if (hitState === false) {
+      const attack = nativeAttack(message, actor);
+      if (canUseLuck(actor) || attack.extras) {
+        debug(`native attack: ${actor.name} total=${roll.total} missed`);
         if (getKeptD20Result(roll) === 1) await LDA.promptNatOne(attack);
         else await LDA.promptLuckOnMiss(attack);
       }

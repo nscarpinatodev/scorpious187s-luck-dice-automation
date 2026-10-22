@@ -5,6 +5,7 @@ import { RIDERS_FLAG } from "./riders.mjs";
 import { REACTIONS_FLAG } from "./reactions.mjs";
 import { ATTACK_REASONS_FLAG, reasonsHTML } from "./advantage.mjs";
 import { MASTERY_RESULT_FLAG } from "./mastery.mjs";
+import { SAVE_REASONS_FLAG, saveReasonsHTML } from "./save-rules.mjs";
 import { MODULE_ID, HISTORY_FLAG, renderLuckSection, APPLIED_FLAG, escapeHTML, APPLIED_EFFECTS_FLAG } from "./shared.mjs";
 import { undoAppliedDamage, undoAppliedEffects } from "./undo.mjs";
 
@@ -55,8 +56,9 @@ export const UNDO_NOTE = "Doesn't reverse dnd5e's own follow-ups: a concentratio
  */
 export function injectNativeHistory(message, html) {
   if (!(html instanceof HTMLElement) || html.querySelector(".midi-results")) return;
-  html.querySelectorAll(".lda-luck-history, .lda-attack-reasons-row, .lda-mastery, .lda-riders, .lda-reactions, .lda-applied-damage, .lda-applied-effects").forEach(el => el.remove());
+  html.querySelectorAll(".lda-luck-history, .lda-attack-reasons-row, .lda-save-reasons-row, .lda-save-summary-note, .lda-mastery, .lda-riders, .lda-reactions, .lda-applied-damage, .lda-applied-effects").forEach(el => el.remove());
   if (!message.isContentVisible) return;
+  injectSummaryNotes(html);
 
   const blocks  = [];
   const history = message.getFlag?.(MODULE_ID, HISTORY_FLAG);
@@ -65,6 +67,8 @@ export function injectNativeHistory(message, html) {
   }
   const attackReasons = message.getFlag?.(MODULE_ID, ATTACK_REASONS_FLAG);
   if (attackReasons?.advantage?.length || attackReasons?.disadvantage?.length) blocks.push(renderAttackReasonsSection(attackReasons));
+  const saveReasons = message.getFlag?.(MODULE_ID, SAVE_REASONS_FLAG);
+  if (saveReasons && saveReasonsHTML(saveReasons)) blocks.push(renderSaveReasonsSection(saveReasons));
   const mastery = message.getFlag?.(MODULE_ID, MASTERY_RESULT_FLAG);
   if (mastery?.text) blocks.push(renderMasterySection(mastery));
   const reactions = message.getFlag?.(MODULE_ID, REACTIONS_FLAG);
@@ -95,6 +99,25 @@ export function injectNativeHistory(message, html) {
   const rollRow = [...html.querySelectorAll("section.icon-row")].filter(row => row.querySelector(".dice-roll")).at(-1);
   if (rollRow) rollRow.after(...blocks);
   else (html.querySelector(".message-content") ?? html).append(...blocks);
+}
+
+/**
+ * Saves folded into their spell's card (dnd5e's summary, one `.card-summary` per save card): each
+ * save's rules (save-rules.mjs) as a line under it, since its own card — and its row — isn't shown.
+ */
+export function injectSummaryNotes(html) {
+  for (const summary of html.querySelectorAll(".card-summary[data-message-id]")) {
+    const save = game.messages.get(summary.dataset.messageId);
+    if (save?.isContentVisible === false) continue; // a private roll this viewer can't see
+    const reasons = save?.getFlag?.(MODULE_ID, SAVE_REASONS_FLAG);
+    const text = reasons ? saveReasonsHTML(reasons) : "";
+    if (!text) continue;
+    const note = document.createElement("div");
+    note.className = "lda-save-summary-note";
+    note.style.cssText = "font-size:0.85em;opacity:0.85;margin:1px 0 2px";
+    note.innerHTML = text;
+    summary.append(note);
+  }
 }
 
 /** "Effects  Goblin: Paralyzed · Pip: Poisoned" as a card row. */
@@ -153,6 +176,17 @@ export function renderAttackReasonsSection(reasons) {
     <section class="icon-row lda-attack-reasons-row" style="display:flex;align-items:flex-start;gap:6px;margin:2px 0">
       <i class="fa-fw fa-solid fa-scale-balanced" aria-label="Advantage and disadvantage" style="margin-top:2px;opacity:0.8"></i>
       <div style="flex:1;min-width:0">${reasonsHTML(reasons)}</div>
+    </section>`.trim();
+  return wrapper.firstElementChild;
+}
+
+/** "Automatic failure: Paralyzed · Advantage: Magic Resistance · Bonus: Aura of Protection +3" as a card row. */
+export function renderSaveReasonsSection(reasons) {
+  const wrapper = document.createElement("div");
+  wrapper.innerHTML = `
+    <section class="icon-row lda-save-reasons-row" style="display:flex;align-items:flex-start;gap:6px;margin:2px 0">
+      <i class="fa-fw fa-solid ${reasons.autoFail ? "fa-ban" : "fa-scale-balanced"}" aria-label="Saving throw rules" style="margin-top:2px;opacity:0.8"></i>
+      <div style="flex:1;min-width:0">${saveReasonsHTML(reasons)}</div>
     </section>`.trim();
   return wrapper.firstElementChild;
 }

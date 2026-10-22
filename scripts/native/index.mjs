@@ -35,8 +35,10 @@ import { recordLingeringArea, tagLingeringArea, onTurnChange, onTokenMoved, onRe
 import { onEffectCreated, onTurnEndRepeatSaves } from "./repeat-saves.mjs";
 import { answerReaction, pendingReactions, onTurnStartReaction } from "./reactions.mjs";
 import { onPreRollAttack, onPreRollDamage, onRenderAttackDialog, consumeAttackMarks, consumeAttackMarkGM } from "./advantage.mjs";
+import { onPreRollSave, onRenderSaveDialog, installAutoFail } from "./save-rules.mjs";
+import { rollExtras, markBoostTargets, markBardicGM, consumeBoostGM, endBoostSpellGM } from "./boosts.mjs";
 import { noResults, rollGMSaves, rollPlayerSave, onActivityUsed } from "./saves.mjs";
-import { MODULE_ID, getPrivateRollOutcome, pendingLuckDamage, pendingAttacks, socket, pendingLuckChecks, pendingSaveRequests, trackPending, setSocket } from "./shared.mjs";
+import { LDA, MODULE_ID, getPrivateRollOutcome, pendingLuckDamage, pendingAttacks, socket, pendingLuckChecks, pendingSaveRequests, trackPending, setSocket } from "./shared.mjs";
 import { needsConfirmation, needsAttackConfirmation } from "./targeting.mjs";
 
 // ── Hooks ─────────────────────────────────────────────────────────────────────
@@ -53,6 +55,11 @@ Hooks.once("ready", () => {
     return;
   }
   console.log(`[${MODULE_ID}] native: Midi-QoL not active — using native dnd5e mode`);
+
+  // Automatic save failures travel with the roll; every client judges them the same way.
+  installAutoFail();
+  // Bardic Inspiration, Lucky… in the shared prompts — also the roll-request window's (skill-check.js).
+  LDA.rollExtras = rollExtras;
 
   // Socket work between clients, via scorpious187s-lib's router. "gm" handlers run
   // on the primary active GM only, so nothing is rolled or applied twice; "any"
@@ -80,6 +87,12 @@ Hooks.once("ready", () => {
         .catch(err => console.error(`[${MODULE_ID}] applyMastery error:`, err)),
       consumeAttackMark: (payload) => consumeAttackMarkGM(payload)
         .catch(err => console.error(`[${MODULE_ID}] consumeAttackMark error:`, err)),
+      markBardic: (payload) => markBardicGM(payload)
+        .catch(err => console.error(`[${MODULE_ID}] markBardic error:`, err)),
+      consumeBoost: (payload) => consumeBoostGM(payload)
+        .catch(err => console.error(`[${MODULE_ID}] consumeBoost error:`, err)),
+      endBoostSpell: (payload) => endBoostSpellGM(payload)
+        .catch(err => console.error(`[${MODULE_ID}] endBoostSpell error:`, err)),
       offerReactionGM: (payload) => answerReaction(payload)
         .then(result => socket?.emit("reactionResult", { to: payload.from, requestId: payload.requestId, result }),
           err => { console.error(`[${MODULE_ID}] offerReaction error:`, err); socket?.emit("reactionResult", { to: payload.from, requestId: payload.requestId, result: null }); }),
@@ -117,6 +130,9 @@ Hooks.once("ready", () => {
   Hooks.on("dnd5e.preRollAttackV2", onPreRollAttack);
   Hooks.on("dnd5e.preRollAttackV2", skipAttackDialog); // never returns false: that would cancel the roll
   Hooks.on("renderAttackRollConfigurationDialog", onRenderAttackDialog);
+  // Saving throw rules (concentration saves too): advantage, Aura of Protection, automatic failures. Never cancels.
+  Hooks.on("dnd5e.preRollSavingThrowV2", onPreRollSave);
+  Hooks.on("renderD20RollConfigurationDialog", onRenderSaveDialog);
   // The last word on whether a roll shows its window (after every type-specific preRoll hook). Never cancels.
   Hooks.on("dnd5e.preRollV2", finalRollDialog);
   Hooks.on("dnd5e.preRollDamageV2", onPreRollDamage); // automatic critical hits; never cancels
@@ -187,6 +203,7 @@ Hooks.once("ready", () => {
     recordWallSpell(activity, usageConfig, results).catch(err => console.error(`[${MODULE_ID}] wall spells:`, err));
     onDisengageUsed(activity).catch(err => console.error(`[${MODULE_ID}] disengage:`, err));
     recordAgathys(activity, usageConfig).catch(err => console.error(`[${MODULE_ID}] armor of agathys:`, err));
+    markBoostTargets(activity, results).catch(err => console.error(`[${MODULE_ID}] roll boosts:`, err));
     const type     = activity?.type;
     const followUp = usageConfig?.subsequentActions !== false;
     if (type === "heal" || type === "damage") {

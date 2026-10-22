@@ -9,7 +9,7 @@ export const {
   combineRolls, HISTORY_FLAG, diceFaces, renderLuckSection, requestRollActors,
   getAttackAutomation, getSaveAutomation, getPrivateRollOutcome,
   isEffectAutomationEnabled, isHealingAutomationEnabled,
-  isDamageOnlyAutomationEnabled, isConcentrationBreakEnabled, isConcentrationAutoRollEnabled, isOnHitRidersEnabled, isLingeringAreasEnabled, isRepeatSavesEnabled, getReactionPrompts, isSkipAttackDialogEnabled, isAttackAdvantageEnabled, getLegendaryResistance, isWeaponMasteryEnabled, isAutoCritsEnabled, isOpportunityAttacksEnabled, isRetaliationEnabled, isDeathSavesEnabled, isClearInstantAreasEnabled, isTurnSummaryEnabled, isWallSpellsEnabled, isRayAutomationEnabled, getTargetConfirmation,
+  isDamageOnlyAutomationEnabled, isConcentrationBreakEnabled, isConcentrationAutoRollEnabled, isOnHitRidersEnabled, isLingeringAreasEnabled, isRepeatSavesEnabled, getReactionPrompts, isSkipAttackDialogEnabled, isAttackAdvantageEnabled, getLegendaryResistance, isWeaponMasteryEnabled, isAutoCritsEnabled, isOpportunityAttacksEnabled, isRetaliationEnabled, isDeathSavesEnabled, isClearInstantAreasEnabled, isTurnSummaryEnabled, isWallSpellsEnabled, isRayAutomationEnabled, getTargetConfirmation, isSaveRulesEnabled, isRollBoostsEnabled,
   readCardHistory, updateRollCard, recordCardStep, finishCardHistory, cardReporter,
 } = LDA;
 

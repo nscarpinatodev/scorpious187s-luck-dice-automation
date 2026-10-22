@@ -475,6 +475,14 @@ function getTargetConfirmation() {
   try { return game.settings.get(MODULE_ID, "targetConfirmation"); } catch { return "off"; }
 }
 
+function isSaveRulesEnabled() {
+  try { return game.settings.get(MODULE_ID, "saveRules"); } catch { return false; }
+}
+
+function isRollBoostsEnabled() {
+  try { return game.settings.get(MODULE_ID, "rollBoosts"); } catch { return false; }
+}
+
 function isInspirationEnabled() {
   try { return game.settings.get(MODULE_ID, "enableInspiration"); } catch { return false; }
 }
@@ -682,12 +690,40 @@ Hooks.once("init", () => {
   });
 
   game.settings.register(MODULE_ID, "attackAdvantage", {
-    name: "Advantage & Disadvantage on Attacks (without Midi-QoL)",
+    name: "Advantage & Disadvantage on Attacks",
     hint: "Check each attack for the obvious reasons: ranged with an enemy within 5 ft, long range (beyond long range " +
           "the attack is cancelled), the attacker's or target's conditions (Prone, Restrained, Blinded, Invisible, " +
           "Paralyzed, Stunned, Unconscious, Petrified, Dodging, Frightened with its source in sight), Reckless Attack, " +
           "Faerie Fire, Guiding Bolt and Heavy weapons. Shown in the roll window and on the card. With Automated " +
-          "Conditions 5e active, the checks it performs are left to it. Ignored when Midi-QoL is active.",
+          "Conditions 5e active, the checks it performs are left to it.",
+    scope: "world",
+    config: true,
+    type: Boolean,
+    default: false
+  });
+
+  game.settings.register(MODULE_ID, "saveRules", {
+    name: "Saving Throw Rules",
+    hint: "Paralyzed, Stunned, Unconscious and Petrified creatures fail Strength and Dexterity saves automatically. " +
+          "Advantage from Magic Resistance (spells and magic items), Gnome Cunning, Duergar Resilience, Dwarven Resilience " +
+          "(poison), Fey Ancestry (charmed), Brave (frightened) and 2014 Danger Sense — dnd5e already covers Rage, 2024 Danger " +
+          "Sense and Gnomish Cunning. Aura of Protection adds the paladin's Charisma modifier to the saves of allies in its " +
+          "aura. Evasion: no damage on a successful Dexterity save, half on a failure (with Save Automation on Full). Shown " +
+          "in the roll window and on the card. With Automated Conditions 5e automating statuses, automatic failures are " +
+          "left to it.",
+    scope: "world",
+    config: true,
+    type: Boolean,
+    default: false
+  });
+
+  game.settings.register(MODULE_ID, "rollBoosts", {
+    name: "Bardic Inspiration, Guidance, Lucky & Indomitable",
+    hint: "After a failed attack, check or save, offer these alongside the Luck Dice (also to creatures without Luck " +
+          "Dice): a Bardic Inspiration die (the bard's target is marked when they use it), 2014 Guidance on ability checks " +
+          "and 2014 Resistance on saves (used up, ending the spell), the Lucky feat (roll another d20 and use the higher — " +
+          "and when an attack hits you, the attacker rolls another and uses the lower) and Indomitable (reroll a failed save; " +
+          "2024 adds your Fighter level). 2024 Guidance adds its d4 through dnd5e already.",
     scope: "world",
     config: true,
     type: Boolean,
@@ -695,10 +731,10 @@ Hooks.once("init", () => {
   });
 
   game.settings.register(MODULE_ID, "legendaryResistance", {
-    name: "Legendary Resistance (without Midi-QoL)",
+    name: "Legendary Resistance",
     hint: "When an NPC with Legendary Resistance left fails a saving throw (including a concentration save), ask the GM " +
           "whether to use it — or use it automatically. It turns the failure into a success through dnd5e, before the " +
-          "save automation applies damage or effects. Ignored when Midi-QoL is active.",
+          "save automation applies damage or effects.",
     scope: "world",
     config: true,
     type: String,
@@ -711,10 +747,10 @@ Hooks.once("init", () => {
   });
 
   game.settings.register(MODULE_ID, "weaponMastery", {
-    name: "Weapon Mastery (without Midi-QoL)",
+    name: "Weapon Mastery",
     hint: "Carry out the 2024 Weapon Mastery property an attack used: Graze (damage on a miss), Topple (Constitution " +
           "save or Prone), Sap (disadvantage on the target's next attack), Vex (advantage on your next attack against " +
-          "it), Slow (−10 ft speed) and Push (10 ft, if you choose). Cleave and Nick aren't automated. Ignored when Midi-QoL is active.",
+          "it), Slow (−10 ft speed) and Push (10 ft, if you choose). Cleave and Nick aren't automated.",
     scope: "world",
     config: true,
     type: Boolean,
@@ -722,9 +758,9 @@ Hooks.once("init", () => {
   });
 
   game.settings.register(MODULE_ID, "autoCrits", {
-    name: "Automatic Critical Hits (without Midi-QoL)",
+    name: "Automatic Critical Hits",
     hint: "A hit on a Paralyzed or Unconscious creature from within 5 ft rolls critical damage. With Automated " +
-          "Conditions 5e automating statuses, it's left to AC5E (which does the same). Ignored when Midi-QoL is active.",
+          "Conditions 5e automating statuses, it's left to AC5E (which does the same).",
     scope: "world",
     config: true,
     type: Boolean,
@@ -732,39 +768,39 @@ Hooks.once("init", () => {
   });
 
   const nativeToggle = (key, name, hint) => game.settings.register(MODULE_ID, key, {
-    name, hint: hint + " Ignored when Midi-QoL is active.", scope: "world", config: true, type: Boolean, default: false
+    name, hint, scope: "world", config: true, type: Boolean, default: false
   });
-  nativeToggle("opportunityAttacks", "Opportunity Attacks (without Midi-QoL)",
+  nativeToggle("opportunityAttacks", "Opportunity Attacks",
     "When a creature moves out of an enemy's reach, offer the enemy an opportunity attack (its player, or the GM for NPCs), " +
     "if it has its reaction. Not provoked when Disengaged (a status the module applies from Disengage features, or toggle it " +
     "on the token HUD), teleporting, or being moved.");
-  nativeToggle("retaliation", "Retaliation Damage (without Midi-QoL)",
+  nativeToggle("retaliation", "Retaliation Damage",
     "Armor of Agathys (while its temporary HP last) and Fire Shield (within 5 ft) deal their damage back to a creature that " +
     "hits the caster with a melee attack.");
-  nativeToggle("deathSaves", "Death Saves (without Midi-QoL)",
+  nativeToggle("deathSaves", "Death Saves",
     "Roll a dying character's death save at the start of its turn (on its player's client). Damage at 0 HP is a failed death " +
     "save (two on a critical hit); damage at or past the HP maximum — or massive damage — is death. Luck Dice that turn a " +
     "death save around are recorded properly.");
-  nativeToggle("clearInstantAreas", "Clear Spell Areas (without Midi-QoL)",
+  nativeToggle("clearInstantAreas", "Clear Spell Areas",
     "Remove an instantaneous spell's placed area once the automation has resolved it (left to Flash Rolls 5e when its Remove " +
     "Template option is on), and a concentration spell's area when its concentration ends. Lingering and wall spells' areas " +
     "always go with their concentration, and are kept while it lasts (hold Shift to delete one anyway).");
-  nativeToggle("wallSpells", "Wall Spells Block (without Midi-QoL)",
+  nativeToggle("wallSpells", "Wall Spells Block",
     "Turn the areas wall spells place into real walls: Wall of Force (movement), Wall of Stone (movement, sight, light, " +
     "sound), Wall of Ice and Forcecage (movement), Prismatic Wall (sight and light). They go when the spell ends. A creature " +
     "a new Wall of Force, Stone or Ice cuts through is pushed to the side the caster's player (or the GM) picks. Solid ones " +
     "(Wall of Force, Stone, Ice; Forcecage's box) give total cover: no attacking or casting at creatures behind them, and " +
     "area spells stop at them.");
-  nativeToggle("turnSummary", "Start-of-Turn Summary (without Midi-QoL)",
+  nativeToggle("turnSummary", "Start-of-Turn Summary",
     "When a creature's turn starts in combat, whisper its owners a summary: effects and their durations, concentration, saves " +
     "due at the end of the turn, lingering areas it's in, death saves, legendary actions and resistances.");
 
   game.settings.register(MODULE_ID, "skipAttackDialog", {
-    name: "Roll Attacks Without the Roll Window (without Midi-QoL)",
+    name: "Roll Attacks Without the Roll Window",
     hint: "Attacks roll straight away instead of opening dnd5e's attack roll window — after using a weapon or spell, " +
           "for each ray of Scorching Ray, and after confirming targets. Holding dnd5e's advantage / disadvantage keys " +
           "still applies them. Automated Conditions 5e's advantage / disadvantage is used as it decided; when it has " +
-          "opt-in choices for the attack, the window opens so you can pick them. Ignored when Midi-QoL is active.",
+          "opt-in choices for the attack, the window opens so you can pick them.",
     scope: "world",
     config: true,
     type: Boolean,
@@ -772,11 +808,11 @@ Hooks.once("init", () => {
   });
 
   game.settings.register(MODULE_ID, "attackAutomation", {
-    name: "Attack Automation (without Midi-QoL)",
+    name: "Attack Automation",
     hint: "What happens after an attack hits, once any Luck Dice are spent. " +
           "Prompt: a one-click \"Roll Damage\" prompt. Roll: damage is rolled automatically. " +
           "Roll and apply: damage is rolled and applied to each hit target (by the GM's client, " +
-          "with resistances handled by dnd5e). Ignored when Midi-QoL is active.",
+          "with resistances handled by dnd5e).",
     scope: "world",
     config: true,
     type: String,
@@ -790,13 +826,12 @@ Hooks.once("init", () => {
   });
 
   game.settings.register(MODULE_ID, "saveAutomation", {
-    name: "Save Automation (without Midi-QoL)",
+    name: "Save Automation",
     hint: "When a save activity (e.g. Fireball) is used on targets. " +
           "Request: every target is asked to save — players get a prompt, the GM one prompt for NPCs. " +
           "Auto-roll NPC saves: the GM's client rolls NPC saves; players roll from the card as usual. " +
           "Full: NPC saves are rolled, players are prompted (with Luck Dice on a failure), then damage is " +
-          "rolled and applied to each target — full on a failure, per the activity's on-save rule on a success. " +
-          "Ignored when Midi-QoL is active.",
+          "rolled and applied to each target — full on a failure, per the activity's on-save rule on a success.",
     scope: "world",
     config: true,
     type: String,
@@ -810,11 +845,11 @@ Hooks.once("init", () => {
   });
 
   game.settings.register(MODULE_ID, "effectAutomation", {
-    name: "Apply Activity Effects (without Midi-QoL)",
+    name: "Apply Activity Effects",
     hint: "Apply an activity's effects (e.g. Hold Person's Paralyzed) to the targets an attack hits, and to the " +
           "targets that fail its save — and, for effects marked to apply on a successful save, to those who pass. " +
           "Save results come from Save Automation, which must be set to Full. Effects are applied the way dnd5e's " +
-          "effects tray applies them, so ones tied to concentration end with it. Ignored when Midi-QoL is active.",
+          "effects tray applies them, so ones tied to concentration end with it.",
     scope: "world",
     config: true,
     type: Boolean,
@@ -822,10 +857,10 @@ Hooks.once("init", () => {
   });
 
   game.settings.register(MODULE_ID, "healingAutomation", {
-    name: "Apply Healing (without Midi-QoL)",
+    name: "Apply Healing",
     hint: "When a healing activity's healing is rolled (dnd5e rolls it right after use), apply it to the targets. " +
           "Area healing targets the creatures in the area; healing that affects only its user (e.g. Second Wind) " +
-          "heals the user. Ignored when Midi-QoL is active.",
+          "heals the user.",
     scope: "world",
     config: true,
     type: Boolean,
@@ -833,10 +868,10 @@ Hooks.once("init", () => {
   });
 
   game.settings.register(MODULE_ID, "damageOnlyAutomation", {
-    name: "Apply Damage-Only Activities (without Midi-QoL)",
+    name: "Apply Damage-Only Activities",
     hint: "When an activity that only deals damage (no attack or save, e.g. Magic Missile) has its damage rolled " +
           "(dnd5e rolls it right after use), apply it to the targets once any Luck Dice are added. Area damage " +
-          "targets the creatures in the area. Ignored when Midi-QoL is active.",
+          "targets the creatures in the area.",
     scope: "world",
     config: true,
     type: Boolean,
@@ -844,10 +879,10 @@ Hooks.once("init", () => {
   });
 
   game.settings.register(MODULE_ID, "onHitRiders", {
-    name: "On-Hit Riders (without Midi-QoL)",
+    name: "On-Hit Riders",
     hint: "When a hit's damage is rolled, add the attacker's riders to it: Hunter's Mark and Hex automatically when " +
           "the target carries the caster's mark; Sneak Attack (finesse or ranged weapon, once per turn) and Divine Smite " +
-          "(melee hit) as a choice. Their dice double on a critical hit and apply with the hit. Ignored when Midi-QoL is active.",
+          "(melee hit) as a choice. Their dice double on a critical hit and apply with the hit.",
     scope: "world",
     config: true,
     type: Boolean,
@@ -855,10 +890,10 @@ Hooks.once("init", () => {
   });
 
   game.settings.register(MODULE_ID, "lingeringAreas", {
-    name: "Lingering Areas (without Midi-QoL)",
+    name: "Lingering Areas",
     hint: "Spirit Guardians, Moonbeam, Cloud of Daggers and similar keep working after the cast: when a creature enters " +
           "the area or starts / ends its turn there (by each spell's 2014 or 2024 rules), its save runs through the Save " +
-          "Automation setting — requested, or in Full mode rolled and applied. Watched by the GM's client. Ignored when Midi-QoL is active.",
+          "Automation setting — requested, or in Full mode rolled and applied. Watched by the GM's client.",
     scope: "world",
     config: true,
     type: Boolean,
@@ -866,11 +901,11 @@ Hooks.once("init", () => {
   });
 
   game.settings.register(MODULE_ID, "repeatSaves", {
-    name: "Repeat Saves at End of Turn (without Midi-QoL)",
+    name: "Repeat Saves at End of Turn",
     hint: "Hold Person, Tasha's Hideous Laughter, Blindness / Deafness and similar: at the end of each of the affected " +
           "creature's turns in combat, request its save again — from its player when online, otherwise rolled by the GM " +
           "— and remove the spell's effect from it on a success. Covers effects applied by the automation or dnd5e's " +
-          "effects tray. Ignored when Midi-QoL is active.",
+          "effects tray.",
     scope: "world",
     config: true,
     type: Boolean,
@@ -878,11 +913,11 @@ Hooks.once("init", () => {
   });
 
   game.settings.register(MODULE_ID, "reactionPrompts", {
-    name: "Reaction Prompts When Hit (without Midi-QoL)",
+    name: "Reaction Prompts When Hit",
     hint: "Offer reactions when they'd matter — on a hit: Shield, Defensive Duelist, Uncanny Dodge, and allies' Cutting " +
           "Words and Silvery Barbs; before damage: Absorb Elements, Parry; after damage: Hellish Rebuke. Asked of the " +
           "creature's player (or the GM); each is used through dnd5e. One reaction per creature until its next turn " +
-          "(shared with opportunity attacks). Ignored when Midi-QoL is active.",
+          "(shared with opportunity attacks).",
     scope: "world",
     config: true,
     type: String,
@@ -895,10 +930,10 @@ Hooks.once("init", () => {
   });
 
   game.settings.register(MODULE_ID, "rayAutomation", {
-    name: "Roll Each Ray or Beam (without Midi-QoL)",
+    name: "Roll Each Ray or Beam",
     hint: "Scorching Ray and Eldritch Blast fire several rays or beams (more when upcast, or as the caster levels), " +
           "but dnd5e rolls one attack. Instead, the caster assigns them to their targets, then each is its own attack " +
-          "roll — with Luck Dice on a miss and the Attack Automation setting for its damage. Ignored when Midi-QoL is active.",
+          "roll — with Luck Dice on a miss and the Attack Automation setting for its damage.",
     scope: "world",
     config: true,
     type: Boolean,
@@ -906,11 +941,11 @@ Hooks.once("init", () => {
   });
 
   game.settings.register(MODULE_ID, "targetConfirmation", {
-    name: "Confirm Targets (without Midi-QoL)",
+    name: "Confirm Targets",
     hint: "Before the module automates a use, show its targets for the caster to confirm: target or untarget creatures " +
           "on the canvas while it's open, or remove them from the list. Applies to what the automation settings act on " +
           "— saves, healing, damage-only activities, rays and beams — and, with the last choice, every attack. Areas only: " +
-          "when an area is placed (its creatures are targeted first). Ignored when Midi-QoL is active.",
+          "when an area is placed (its creatures are targeted first).",
     scope: "world",
     config: true,
     type: String,
@@ -924,10 +959,10 @@ Hooks.once("init", () => {
   });
 
   game.settings.register(MODULE_ID, "concentrationAutoRoll", {
-    name: "Auto-Roll Concentration Checks (without Midi-QoL)",
+    name: "Auto-Roll Concentration Checks",
     hint: "When a concentrating creature takes damage, dnd5e only posts a Concentration button. Instead, roll the " +
           "check right away — on its player's client when they're online (with their Luck Dice), otherwise on the GM's — " +
-          "and remove the prompt. Ignored when Midi-QoL is active.",
+          "and remove the prompt.",
     scope: "world",
     config: true,
     type: Boolean,
@@ -935,10 +970,9 @@ Hooks.once("init", () => {
   });
 
   game.settings.register(MODULE_ID, "concentrationBreak", {
-    name: "Break Concentration on a Failed Save (without Midi-QoL)",
+    name: "Break Concentration on a Failed Save",
     hint: "When a concentration save still fails after any Luck Dice, end the creature's concentration — what " +
-          "dnd5e's Break Concentration button does — and mark the card Concentration Lost. Spells tied to it end too. " +
-          "Ignored when Midi-QoL is active.",
+          "dnd5e's Break Concentration button does — and mark the card Concentration Lost. Spells tied to it end too.",
     scope: "world",
     config: true,
     type: Boolean,
@@ -946,11 +980,11 @@ Hooks.once("init", () => {
   });
 
   game.settings.register(MODULE_ID, "privateRollOutcome", {
-    name: "Players See the GM's Private Rolls (without Midi-QoL)",
+    name: "Players See the GM's Private Rolls",
     hint: "When the GM rolls privately and the roll affects player characters (an NPC attacks a PC, an NPC's spell hits PCs). " +
           "Outcome card: a public card with just the outcome for those characters — hit or miss, saved or failed, damage taken — " +
           "never the NPC's totals, bonuses or DCs. Share: the GM's private attack and damage cards are also shown to the players " +
-          "whose characters they target. Keep private: players see none of the GM's private rolls. Ignored when Midi-QoL is active.",
+          "whose characters they target. Keep private: players see none of the GM's private rolls.",
     scope: "world",
     config: true,
     type: String,
@@ -975,6 +1009,93 @@ Hooks.once("init", () => {
   console.log(`[${MODULE_ID}] Settings registered.`);
 });
 
+// ── Settings window layout ────────────────────────────────────────────────────
+// Foundry lists a module's settings in one run, in registration order. In the
+// settings window they're sorted into these headed sections instead — the
+// automation under its own heading, since it only works without Midi-QoL. A
+// setting not listed here goes under "Other", so none can go missing.
+
+const SETTINGS_LAYOUT = [
+  { title: "Luck Dice", major: true, hint: "The Luck Dice prompts after failed rolls — with Midi-QoL or without it.",
+    keys: ["diceTracker", "enableLuckDice", "enableInspiration", "inspirationAdvantage", "mirrorToGM", "hideCheckCardsFromGM"] },
+  { title: "Automation", major: true, automation: true,
+    hint: "dnd5e automation without Midi-QoL. While Midi-QoL is active, Midi does this work and these settings are ignored." },
+  { title: "Attacks", keys: ["skipAttackDialog", "attackAutomation", "attackAdvantage", "autoCrits", "weaponMastery", "onHitRiders", "rayAutomation"] },
+  { title: "Saving Throws", keys: ["saveAutomation", "saveRules", "legendaryResistance", "repeatSaves", "deathSaves"] },
+  { title: "Concentration", keys: ["concentrationAutoRoll", "concentrationBreak"] },
+  { title: "Healing, Damage & Effects", keys: ["healingAutomation", "damageOnlyAutomation", "effectAutomation", "retaliation"] },
+  { title: "Reactions & Roll Bonuses", keys: ["reactionPrompts", "rollBoosts", "opportunityAttacks"] },
+  { title: "Targets, Areas & Walls", keys: ["targetConfirmation", "lingeringAreas", "clearInstantAreas", "wallSpells"] },
+  { title: "Chat & Turns", keys: ["privateRollOutcome", "turnSummary"] },
+  { title: "Other", major: true, keys: ["debug"] }
+];
+
+/** A heading for the settings window: a major section, or a group inside one. */
+function settingsHeading({ title, hint, major }) {
+  const heading = document.createElement("div");
+  heading.className = "lda-settings-heading";
+  if (major) heading.dataset.major = "1";
+  heading.style.cssText = major
+    ? "margin:14px 0 4px;padding-bottom:3px;border-bottom:2px solid var(--color-border-highlight, #ff6400)"
+    : "margin:10px 0 2px;padding-bottom:2px;border-bottom:1px solid var(--color-border, #7a7971)";
+  heading.innerHTML = `<h${major ? 3 : 4} style="margin:0;border:none">${title}</h${major ? 3 : 4}>` +
+    (hint ? `<p class="hint" style="margin:2px 0 0">${hint}</p>` : "");
+  return heading;
+}
+
+/** renderSettingsConfig: sort this module's settings into SETTINGS_LAYOUT's sections. Safe to run again. */
+function layoutSettings(app, html) {
+  const root = html instanceof HTMLElement ? html : html?.[0] ?? app?.element;
+  if (!root?.querySelectorAll) return;
+  root.querySelectorAll(".lda-settings-heading").forEach(el => el.remove());
+  // Each setting's form group, by key: its input is named "<module>.<key>"; a menu's button carries that as data-key.
+  const groups = new Map();
+  for (const el of root.querySelectorAll(`[name^="${MODULE_ID}."], [data-key^="${MODULE_ID}."]`)) {
+    const key = (el.getAttribute("name") ?? el.dataset.key).slice(MODULE_ID.length + 1);
+    const group = el.closest(".form-group");
+    if (group && !groups.has(key)) groups.set(key, group);
+  }
+  const container = groups.values().next().value?.parentElement;
+  if (!container) return;
+
+  const midi = !!game.modules.get("midi-qol")?.active;
+  const placed = new Set();
+  for (const section of SETTINGS_LAYOUT) {
+    const members = (section.keys ?? []).filter(k => groups.has(k));
+    const others = section.title === "Other" ? [...groups.keys()].filter(k => !placed.has(k) && !members.includes(k)) : [];
+    if (section.keys && !members.length && !others.length) continue;
+    const hint = section.automation && midi
+      ? `${section.hint} <strong>Midi-QoL is active</strong>, so none of them are in use.` : section.hint;
+    container.append(settingsHeading({ ...section, hint }));
+    for (const key of [...members, ...others]) { container.append(groups.get(key)); placed.add(key); }
+  }
+
+  // The window's search hides settings that don't match: hide headings with nothing left under them.
+  syncHeadings(container);
+  if (!container.ldaHeadingObserver) {
+    container.ldaHeadingObserver = new MutationObserver(() => syncHeadings(container));
+    container.ldaHeadingObserver.observe(container, { attributes: true, attributeFilter: ["hidden"], subtree: true });
+  }
+}
+
+/** Show a heading only while a setting under it (up to the next heading of its rank) is shown. */
+function syncHeadings(container) {
+  const children = [...container.children];
+  const isHeading = (el) => el.classList.contains("lda-settings-heading");
+  children.forEach((el, i) => {
+    if (!isHeading(el)) return;
+    const major = el.dataset.major === "1";
+    let shown = false;
+    for (const next of children.slice(i + 1)) {
+      if (isHeading(next) && (!major || next.dataset.major === "1")) break;
+      if (!isHeading(next) && !next.hidden) { shown = true; break; }
+    }
+    if (el.hidden !== !shown) el.hidden = !shown;
+  });
+}
+
+Hooks.on("renderSettingsConfig", layoutSettings);
+
 return {
   MODULE_ID, LUCK_DICE_ITEM_NAME, IMPACT_DICE_ITEM_NAME,
   workflowState, pendingMidiSaveResults, clamp, debug,
@@ -988,7 +1109,7 @@ return {
   whisperLuckRegain, maybeRegainLuckDie,
   isLuckDiceEnabled, isInspirationEnabled, getAttackAutomation, getSaveAutomation, getPrivateRollOutcome,
   isEffectAutomationEnabled, isHealingAutomationEnabled,
-  isDamageOnlyAutomationEnabled, isConcentrationBreakEnabled, isConcentrationAutoRollEnabled, isOnHitRidersEnabled, isLingeringAreasEnabled, isRepeatSavesEnabled, getReactionPrompts, isSkipAttackDialogEnabled, isAttackAdvantageEnabled, getLegendaryResistance, isWeaponMasteryEnabled, isAutoCritsEnabled, isOpportunityAttacksEnabled, isRetaliationEnabled, isDeathSavesEnabled, isClearInstantAreasEnabled, isTurnSummaryEnabled, isWallSpellsEnabled, isRayAutomationEnabled, getTargetConfirmation,
+  isDamageOnlyAutomationEnabled, isConcentrationBreakEnabled, isConcentrationAutoRollEnabled, isOnHitRidersEnabled, isLingeringAreasEnabled, isRepeatSavesEnabled, getReactionPrompts, isSkipAttackDialogEnabled, isAttackAdvantageEnabled, getLegendaryResistance, isWeaponMasteryEnabled, isAutoCritsEnabled, isOpportunityAttacksEnabled, isRetaliationEnabled, isDeathSavesEnabled, isClearInstantAreasEnabled, isTurnSummaryEnabled, isWallSpellsEnabled, isRayAutomationEnabled, getTargetConfirmation, isSaveRulesEnabled, isRollBoostsEnabled,
   actorHasInspiration, consumeInspiration, evaluateInspirationReroll,
   HISTORY_FLAG, diceFaces, renderLuckSection, requestRollActors,
   readCardHistory, updateRollCard, recordCardStep, finishCardHistory, cardReporter,

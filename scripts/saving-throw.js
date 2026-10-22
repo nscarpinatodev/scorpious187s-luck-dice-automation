@@ -34,20 +34,29 @@ console.log(`[${MODULE_ID}] saving-throw.js parsed — user=${game?.user?.name ?
  * dnd5e rolls), each reroll is reported to it — for display on that mode's card —
  * instead of being written to a roll card here. entry: { label, total, detail };
  * rolls: { roll } — the new roll, for a caller that rewrites the card's roll.
+ *
+ * extras: optional other ways to change the roll (native mode — see promptLuckOnCheckFail),
+ * offered here too. One that adds to the roll leaves the natural 1, so this prompt comes back;
+ * one that replaces it hands over to the full luck-dice loop like a reroll.
  */
-async function promptNatOneSave(actor, rollTotal, dc, originalRoll, rollMsgId, rollMsgContent, showDC = true, reporter = null) {
+async function promptNatOneSave(actor, rollTotal, dc, originalRoll, rollMsgId, rollMsgContent, showDC = true, reporter = null, extras = null) {
   if (!game.user.isGM && actor.hasPlayerOwner && !actor.isOwner) return null;
 
   const luckEnabled = isLuckDiceEnabled();
+  const hasLuck     = luckEnabled && actorHasLuckDice(actor);
   const luckAvail   = luckEnabled
     ? getDiceUses(actor, LUCK_DICE_ITEM_NAME) + getDiceUses(actor, IMPACT_DICE_ITEM_NAME)
     : 0;
-  const hasInsp = isInspirationEnabled() && actorHasInspiration(actor);
+  // Something already added to the roll (an extra): a reroll would throw it away.
+  const added   = rollTotal !== Number(originalRoll?.total ?? rollTotal);
+  const hasInsp = isInspirationEnabled() && actorHasInspiration(actor) && !added;
+  const canReroll = luckAvail >= 2 && !added;
+  const extraOpts = extras?.options({ added }) ?? [];
 
   // No usable resources — auto-regain one luck die (mirrors nat-1 attack behaviour).
-  if (luckAvail < 2 && !hasInsp) {
+  if (!canReroll && !hasInsp && !extraOpts.length) {
     debug(`promptNatOneSave: no resources for ${actor.name} — auto-regaining`);
-    if (luckEnabled && actorHasLuckDice(actor)) {
+    if (hasLuck) {
       await updateLuckUses(actor, 1);
       await whisperLuckRegain(actor, "natural 1 saving throw with no dice to reroll");
     }
@@ -55,25 +64,42 @@ async function promptNatOneSave(actor, rollTotal, dc, originalRoll, rollMsgId, r
   }
 
   const options = [];
-  if (hasInsp)        options.push({ action: "inspiration", label: "Use Inspiration (Reroll)" });
-  if (luckAvail >= 2) options.push({ action: "reroll",      label: "Spend 2 Dice to Reroll" });
-  options.push({ action: "keep", label: luckEnabled ? "Keep Failure (Gain 1 Luck Die)" : "Keep Failure" });
+  if (hasInsp)   options.push({ action: "inspiration", label: "Use Inspiration (Reroll)" });
+  if (canReroll) options.push({ action: "reroll",      label: "Spend 2 Dice to Reroll" });
+  options.push(...extraOpts);
+  options.push({ action: "keep", label: hasLuck ? "Keep Failure (Gain 1 Luck Die)" : "Keep Failure" });
 
   const action = await promptChoice(
     "Natural 1 on Save!",
-    `<p><strong>${actor.name}</strong> rolled a natural 1 on a saving throw. What would you like to do?</p>
-     ${luckEnabled ? buildDiceAvailableHTML(actor) : ""}`,
+    `<p><strong>${actor.name}</strong> rolled a natural 1 on a saving throw${rollTotal !== Number(originalRoll?.total ?? rollTotal) ? ` (now <strong>${rollTotal}</strong>)` : ""}. What would you like to do?</p>
+     ${hasLuck ? buildDiceAvailableHTML(actor) : ""}`,
     options
   );
 
   console.log(`[${MODULE_ID}] promptNatOneSave: ${actor.name} chose "${action}"`);
 
   if (!action || action === "keep") {
-    if (luckEnabled) {
+    if (hasLuck) {
       await updateLuckUses(actor, 1);
       await whisperLuckRegain(actor, "kept natural 1 saving throw");
     }
     return { finalTotal: rollTotal, passed: false };
+  }
+
+  if (extras?.handles(action)) {
+    const out = await extras.run(action, originalRoll);
+    if (!out) return promptNatOneSave(actor, rollTotal, dc, originalRoll, rollMsgId, rollMsgContent, showDC, reporter, extras);
+    if (out.roll) {
+      const newTotal = Number(out.roll.total ?? 0);
+      if (reporter) await reporter({ label: out.label, total: newTotal, detail: out.detail }, { roll: out.roll });
+      if (newTotal >= dc) return { finalTotal: newTotal, passed: true };
+      return promptLuckOnCheckFail(actor, newTotal, dc, rollMsgId, rollMsgContent, out.roll,
+        "Failed Saving Throw", "saving throw", showDC, reporter, extras);
+    }
+    const newTotal = rollTotal + Number(out.bonusRoll?.total ?? 0);
+    if (reporter) await reporter({ label: out.label, total: newTotal, detail: out.detail }, { bonusRoll: out.bonusRoll });
+    if (newTotal >= dc) return { finalTotal: newTotal, passed: true };
+    return promptNatOneSave(actor, newTotal, dc, originalRoll, rollMsgId, rollMsgContent, showDC, reporter, extras);
   }
 
   // Helper: show a reroll — report it when a reporter is given, otherwise append
@@ -125,7 +151,7 @@ async function promptNatOneSave(actor, rollTotal, dc, originalRoll, rollMsgId, r
     // Still failing — hand off to the full luck-dice loop (add-dice now available).
     return await promptLuckOnCheckFail(
       actor, newTotal, dc, newMsgId, newContent, newRoll,
-      "Failed Saving Throw", "saving throw", showDC, reporter
+      "Failed Saving Throw", "saving throw", showDC, reporter, extras
     );
   }
 

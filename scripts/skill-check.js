@@ -430,18 +430,20 @@ async function rollSkillForCheck(actor, checkValue, dc, showDC = false, gmCardId
     const isSave    = type === "save";
     const d20Result = isSave ? getKeptD20Result(roll) : null;
     const isNatOne  = d20Result === 1;
+    // Native mode's other ways to change the roll (Bardic Inspiration, Lucky…), when it set them up.
+    const extras    = reporter ? (LDA.rollExtras?.(actor, isSave ? "save" : "check") ?? null) : null;
 
     let result;
     if (isSave && isNatOne) {
       // Saves get a restricted nat-1 dialog (reroll or gain luck die — no add-dice).
       // promptNatOneSave is in saving-throw.js which loads after us — use LDA for late binding.
-      result = await LDA.promptNatOneSave(actor, total, dc, roll, rollMsgId, rollMsgContent, showDC, reporter);
+      result = await LDA.promptNatOneSave(actor, total, dc, roll, rollMsgId, rollMsgContent, showDC, reporter, extras);
     } else {
       result = await promptLuckOnCheckFail(
         actor, total, dc, rollMsgId, rollMsgContent, roll,
         isSave ? "Failed Saving Throw" : "Failed Skill Check",
         isSave ? "saving throw"         : "skill check",
-        showDC, reporter
+        showDC, reporter, extras
       );
     }
     if (rollMsg) await finishCardHistory(rollMsg, result?.passed ? "passed" : "failed", { always: true });
@@ -457,21 +459,29 @@ async function rollSkillForCheck(actor, checkValue, dc, showDC = false, gmCardId
  * that mode's card — instead of being written to a roll card here.
  * entry: { label, total, detail }; rolls: { roll } for a reroll (the new roll) or
  * { bonusRoll } for added dice, for a caller that rewrites the card's roll.
+ *
+ * extras: optional other ways to change the roll (native mode's Bardic Inspiration,
+ * Lucky…): { options({ added }) → [{ action, label }], handles(action), run(action, roll)
+ * → { roll } (replaces the roll) or { bonusRoll } (adds to it), with { label, detail } }.
+ * They're offered beside the Luck Dice and don't count as spending them.
  */
-async function promptLuckOnCheckFail(actor, rollTotal, dc, rollMsgId = null, rollMsgContent = "", originalRoll = null, dialogTitle = "Failed Skill Check", rollType = "skill check", showDC = true, reporter = null) {
+async function promptLuckOnCheckFail(actor, rollTotal, dc, rollMsgId = null, rollMsgContent = "", originalRoll = null, dialogTitle = "Failed Skill Check", rollType = "skill check", showDC = true, reporter = null, extras = null) {
   // Permission guard: only the actor's owner (or GM) may see the dialog.
   if (!game.user.isGM && actor.hasPlayerOwner && !actor.isOwner) return;
 
   const luckEnabled = isLuckDiceEnabled();
+  // Luck Dice for this actor: the feature is on and the actor carries the dice items.
+  const hasLuck     = luckEnabled && actorHasLuckDice(actor);
+  const extraOptions = (added) => extras?.options({ added }) ?? [];
 
-  if (luckEnabled && !actorHasLuckDice(actor) && !isInspirationEnabled()) return;
+  if (luckEnabled && !actorHasLuckDice(actor) && !isInspirationEnabled() && !extraOptions(false).length) return;
 
   const luckAvail   = luckEnabled ? getDiceUses(actor, LUCK_DICE_ITEM_NAME)   : 0;
   const impactAvail = luckEnabled ? getDiceUses(actor, IMPACT_DICE_ITEM_NAME) : 0;
   const totalAvail  = luckAvail + impactAvail;
   const hasInspNow  = isInspirationEnabled() && actorHasInspiration(actor);
 
-  if (totalAvail <= 0 && !hasInspNow) {
+  if (totalAvail <= 0 && !hasInspNow && !extraOptions(false).length) {
     // No resources at all — auto-regain one luck die if applicable.
     if (luckEnabled && actorHasLuckDice(actor)) {
       debug(`promptLuckOnCheckFail: no dice available for ${actor.name} — auto-regaining`);
@@ -489,6 +499,7 @@ async function promptLuckOnCheckFail(actor, rollTotal, dc, rollMsgId = null, rol
   let currentBaseMsgContent = rollMsgContent;
   let hasRerolled           = false;        // true once a luck dice reroll has been made
   let inspirationUsed       = false;        // true once inspiration has been consumed
+  let extraAdded            = false;        // true once an extra (Bardic Inspiration…) added to the roll
 
   // Show a reroll: report it when a reporter is given, otherwise append it to
   // the roll card (or a new card) immediately so the player sees the new total.
@@ -517,9 +528,11 @@ async function promptLuckOnCheckFail(actor, rollTotal, dc, rollMsgId = null, rol
     const curImpact = luckEnabled ? getDiceUses(actor, IMPACT_DICE_ITEM_NAME) : 0;
     const curTotal  = curLuck + curImpact;
     const hasInsp   = isInspirationEnabled() && actorHasInspiration(actor);
+    // Extras that replace the roll are offered only before anything was added to it.
+    const extraOpts = extraOptions(allBonusRolls.length > 0 || extraAdded);
 
     // Once dice have been committed (reroll or add), running dry ends the attempt silently.
-    if (curTotal <= 0 && !hasInsp) {
+    if (curTotal <= 0 && !hasInsp && !extraOpts.length) {
       if (!hasRerolled && allBonusRolls.length === 0 && !inspirationUsed) {
         if (luckEnabled && actorHasLuckDice(actor)) {
           await updateLuckUses(actor, 1);
@@ -534,28 +547,29 @@ async function promptLuckOnCheckFail(actor, rollTotal, dc, rollMsgId = null, rol
     // Build option list based on what's available and what's already been spent.
     const options = [];
     // Inspiration reroll — only before any other resource has been committed.
-    if (hasInsp && allBonusRolls.length === 0 && !inspirationUsed)
+    if (hasInsp && allBonusRolls.length === 0 && !extraAdded && !inspirationUsed)
       options.push({ action: "inspiration", label: "Use Inspiration (Reroll)" });
     // Luck dice options are blocked once inspiration has been used on this roll.
     if (!inspirationUsed) {
       // Reroll — only before bonus dice have been added this attempt.
-      if (luckEnabled && currentRoll && curTotal >= 2 && allBonusRolls.length === 0)
+      if (luckEnabled && currentRoll && curTotal >= 2 && allBonusRolls.length === 0 && !extraAdded)
         options.push({ action: "reroll", label: "Spend 2 Dice to Reroll" });
       if (luckEnabled && curTotal > 0)
         options.push({ action: "add", label: `Add Dice (1–${curTotal}d6)` });
     }
+    options.push(...extraOpts);
     // Keep failure — always show as an escape; luck die gain only if nothing was committed.
     // After inspiration, diceCommitted is true so no die is gained, but we still show the button.
     if (!diceCommitted)
-      options.push({ action: "keep", label: luckEnabled ? "Keep Failure (Gain 1 Luck Die)" : "Keep Failure" });
+      options.push({ action: "keep", label: hasLuck ? "Keep Failure (Gain 1 Luck Die)" : "Keep Failure" });
     else if (inspirationUsed)
       options.push({ action: "keep", label: "Keep Failure" });
 
     const action = await promptChoice(
       dialogTitle,
       `<p><strong>${actor.name}</strong> rolled <strong>${currentTotal}</strong>${showDC ? ` vs DC <strong>${dc}</strong>` : ""}.</p>
-       <p>Spend dice to improve the roll, or keep the failure?</p>
-       ${luckEnabled ? buildDiceAvailableHTML(actor) : ""}`,
+       <p>${hasLuck ? "Spend dice to improve the roll, or keep the failure?" : "Improve the roll, or keep the failure?"}</p>
+       ${hasLuck ? buildDiceAvailableHTML(actor) : ""}`,
       options
     );
 
@@ -563,11 +577,34 @@ async function promptLuckOnCheckFail(actor, rollTotal, dc, rollMsgId = null, rol
 
     if (!action || action === "keep") {
       // Only grant a luck die if no resources were already committed this attempt.
-      if (luckEnabled && !diceCommitted) {
+      if (hasLuck && !diceCommitted) {
         await updateLuckUses(actor, 1);
         await whisperLuckRegain(actor, "kept failed skill check");
       }
       return { finalTotal: currentTotal, passed: false };
+    }
+
+    if (extras?.handles(action)) {
+      const out = await extras.run(action, currentRoll);
+      if (!out) continue; // couldn't be used after all: ask again
+      if (out.roll) {
+        baseTotal    = Number(out.roll.total ?? 0);
+        currentTotal = baseTotal;
+        currentRoll  = out.roll;
+        allBonusRolls = [];
+        if (reporter) await reporter({ label: out.label, total: currentTotal, detail: out.detail }, { roll: out.roll });
+        else await showReroll(out.roll, out.label, out.label);
+      } else if (out.bonusRoll) {
+        extraAdded = true;
+        currentTotal += Number(out.bonusRoll.total ?? 0);
+        if (reporter) await reporter({ label: out.label, total: currentTotal, detail: out.detail }, { bonusRoll: out.bonusRoll });
+        else {
+          allBonusRolls.push(out.bonusRoll);
+          bonusMsgId = await postCheckBonus(actor, baseTotal, allBonusRolls, currentTotal, dc, bonusMsgId, currentBaseMsgContent, rollType, showDC);
+        }
+      }
+      if (currentTotal >= dc) return { finalTotal: currentTotal, passed: true };
+      continue;
     }
 
     if (action === "inspiration") {

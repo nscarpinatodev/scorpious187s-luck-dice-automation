@@ -199,7 +199,23 @@ Hooks.once("init", () => {
   });
   const module = game.modules.get(MODULE_ID);
   if (module) module.api = Object.assign(module.api ?? {}, { openDiceTracker: () => DiceTracker.open() });
+
+  // GM-only; no default key — assigned in Configure Controls, like the check launcher's.
+  game.keybindings.register(MODULE_ID, "toggleDiceTracker", {
+    name: "Open / Close Luck Dice Tracker",
+    hint: "Opens the Luck Dice Tracker, or closes it if it's open (the same as its button in the token controls).",
+    editable: [],
+    restricted: true,
+    onDown: () => { toggleDiceTracker(); return true; }
+  });
 });
+
+/** Open the tracker, or close it if it's already open. */
+function toggleDiceTracker() {
+  const existing = foundry.applications.instances?.get(DiceTracker.DEFAULT_OPTIONS.id);
+  if (existing) existing.close();
+  else DiceTracker.open();
+}
 
 Hooks.on("getSceneControlButtons", (controls) => {
   const tools = controls?.tokens?.tools;
@@ -211,10 +227,6 @@ Hooks.on("getSceneControlButtons", (controls) => {
     order: Object.keys(tools).length,
     button: true,
     visible: game.user.isGM,
-    onChange: () => {
-      const existing = foundry.applications.instances?.get(DiceTracker.DEFAULT_OPTIONS.id);
-      if (existing) existing.close();
-      else DiceTracker.open();
-    }
+    onChange: toggleDiceTracker
   };
 });

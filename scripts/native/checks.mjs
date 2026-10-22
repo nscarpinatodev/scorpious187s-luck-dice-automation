@@ -2,39 +2,49 @@
 // Saves, ability checks, skills, tools and concentration: Luck Dice on a failure; breaking concentration.
 
 import { correctDeathSave } from "./deathsaves.mjs";
+import { rollExtras } from "./boosts.mjs";
+import { autoFailOf } from "./save-rules.mjs";
 import { LDA, MODULE_ID, debug, getKeptD20Result, HISTORY_FLAG, requestRollActors, isConcentrationBreakEnabled, finishCardHistory, cardReporter, canUseLuck, promptChoice, escapeHTML, getLegendaryResistance } from "./shared.mjs";
 
 // ── Saves, checks and concentration ──────────────────────────────────────────
 
 // Post-roll hooks as dnd5e 6 fires them: saves and ability checks only have the
 // plain name (Actor5e#rollD20Test fires no V2 variant); skills, tools and
-// concentration fire both, so their V2 names are used.
+// concentration fire both, so their V2 names are used. `kind` picks the extras (boosts.mjs).
 export const D20_TESTS = {
-  "dnd5e.rollSavingThrow":     { title: "Failed Saving Throw",       rollType: "saving throw",       natOneSave: true },
-  "dnd5e.rollConcentrationV2": { title: "Failed Concentration Save", rollType: "concentration save", natOneSave: true },
-  "dnd5e.rollAbilityCheck":    { title: "Failed Ability Check",      rollType: "ability check" },
-  "dnd5e.rollSkillV2":         { title: "Failed Skill Check",        rollType: "skill check" },
-  "dnd5e.rollToolCheckV2":     { title: "Failed Tool Check",         rollType: "tool check" },
+  "dnd5e.rollSavingThrow":     { title: "Failed Saving Throw",       rollType: "saving throw",       natOneSave: true, kind: "save" },
+  "dnd5e.rollConcentrationV2": { title: "Failed Concentration Save", rollType: "concentration save", natOneSave: true, kind: "save" },
+  "dnd5e.rollAbilityCheck":    { title: "Failed Ability Check",      rollType: "ability check",      kind: "check" },
+  "dnd5e.rollSkillV2":         { title: "Failed Skill Check",        rollType: "skill check",        kind: "check" },
+  "dnd5e.rollToolCheckV2":     { title: "Failed Tool Check",         rollType: "tool check",         kind: "check" },
 };
 
 /**
  * A failed save, check or concentration roll against a known DC. Uses the same
  * prompts as the roll-request window and Midi saves; their reporter receives
  * each step and rewrites the card's roll, so dnd5e redraws success / failure.
- * Rolls without a DC are skipped — nothing says they failed.
+ * Rolls without a DC are skipped — nothing says they failed — and so are
+ * automatic failures (save-rules.mjs), which no bonus can turn around.
  */
 export async function onD20TestRolled(rolls, data, test) {
   try {
     const roll    = rolls?.[0];
     const message = roll?.parent;
     const actor   = data?.subject;
-    if (!message || !canUseLuck(actor)) return;
+    if (!message || !actor) return;
     if (requestRollActors.has(actor.id)) return; // the roll-request window runs its own prompt
+    if (autoFailOf(roll)) return;
 
     const dc = Number(roll.options?.target);
     if (!Number.isFinite(dc) || dc <= 0) return;
+    // Automated Conditions 5e's forced failure (its DC of 999): nothing could reach it.
+    if (dc === 999 && game.modules.get("automated-conditions-5e")?.active) return;
     const total = Number(roll.total ?? 0);
     if (total >= dc) return;
+
+    // Bardic Inspiration, Lucky… — offered with the Luck Dice, and to creatures without them.
+    const extras = rollExtras(actor, test.kind ?? "check");
+    if (!canUseLuck(actor) && !extras) return;
 
     debug(`native ${test.rollType}: ${actor.name} rolled ${total} vs DC ${dc}`);
 
@@ -43,8 +53,8 @@ export async function onD20TestRolled(rolls, data, test) {
     // dnd5e's own rule: the roller and the GM always see a DC; others per its setting.
     const showDC = message.shouldDisplayChallenge ?? true;
     const result = (test.natOneSave && getKeptD20Result(roll) === 1)
-      ? await LDA.promptNatOneSave(actor, total, dc, roll, null, "", showDC, reporter)
-      : await LDA.promptLuckOnCheckFail(actor, total, dc, null, "", roll, test.title, test.rollType, showDC, reporter);
+      ? await LDA.promptNatOneSave(actor, total, dc, roll, null, "", showDC, reporter, extras)
+      : await LDA.promptLuckOnCheckFail(actor, total, dc, null, "", roll, test.title, test.rollType, showDC, reporter, extras);
 
     await finishCardHistory(message, result?.passed && result.finalTotal >= dc ? "passed" : "failed");
     await refreshOriginSummary(message);

@@ -26,6 +26,7 @@ import { MODULE_ID, debug, escapeHTML, isAttackAdvantageEnabled, isAutoCritsEnab
 import { MASTERY_FLAG } from "./mastery.mjs";
 
 export const ATTACK_REASONS_FLAG = "attackReasons";
+export const SAVE_REASONS_FLAG = "saveReasons"; // save-rules.mjs
 const AC5E_ID = "automated-conditions-5e";
 const INCAPACITATING = ["incapacitated", "paralyzed", "petrified", "stunned", "unconscious", "dead"];
 
@@ -89,7 +90,7 @@ export function hasLineOfSight(a, b) {
 // ── Where effects came from ───────────────────────────────────────────────────
 
 /** The item an applied effect came from, from what dnd5e records on it. */
-function sourceItem(effect) {
+export function sourceItem(effect) {
   const candidates = [effect.system?.origin?.item, effect.system?.origin?.activity?.split(".Activity.")[0],
     effect._stats?.duplicateSource?.split(".ActiveEffect.")[0], effect._stats?.compendiumSource?.split(".ActiveEffect.")[0], effect.origin];
   for (const uuid of candidates) {
@@ -103,7 +104,7 @@ function sourceItem(effect) {
 }
 
 /** The actor an effect came from (its origin's owner), resolved synchronously. */
-function sourceActor(effect) {
+export function sourceActor(effect) {
   const item = sourceItem(effect);
   if (item?.actor) return item.actor;
   for (const uuid of [effect.system?.origin?.activity, effect.origin]) {
@@ -124,7 +125,8 @@ function effectsFrom(actor, identifier) {
 }
 
 const hasFeat = (actor, identifier) => actor?.items?.find?.(i => i.system?.identifier === identifier) ?? null;
-const rulesOf = (item) => {
+/** "2014" or "2024": the item's own rules, else the world's. */
+export const rulesOf = (item) => {
   const rules = String(item?.system?.source?.rules ?? "");
   if (rules === "2014" || rules === "2024") return rules;
   try { return game.settings.get("dnd5e", "rulesVersion") === "legacy" ? "2014" : "2024"; } catch { return "2024"; }
@@ -323,10 +325,20 @@ export function onPreRollAttack(config, dialog, message) {
   }
   if (!reasons.advantage.length && !reasons.disadvantage.length) return;
 
-  // Combine with what's already on the roll: Automated Conditions 5e's verdict (it decides in
-  // dnd5e.preRollAttack, just before this, and writes a normal roll as advantage + disadvantage, so
-  // its own record of its sources is read instead), or dnd5e's own sources (e.g. Poisoned).
-  // Any advantage plus any disadvantage is a normal roll.
+  reasons.finalMode = mergeRollMode(config, dialog, reasons);
+  ensureFinalModeHook();
+  if (message) foundry.utils.setProperty(message, `data.flags.${MODULE_ID}.${ATTACK_REASONS_FLAG}`, reasons);
+  debug(`attack reasons: +[${reasons.advantage.join(", ")}] −[${reasons.disadvantage.join(", ")}] → mode ${reasons.finalMode}`);
+}
+
+/**
+ * Put the reasons' advantage / disadvantage on a d20 roll's config (attacks, saves), combined with
+ * what's already on it: Automated Conditions 5e's verdict (it decides in the V1 preRoll hook, just
+ * before this, and writes a normal roll as advantage + disadvantage, so its own record of its sources
+ * is read instead), or dnd5e's own sources (e.g. Poisoned). Any advantage plus any disadvantage is a
+ * normal roll. Returns the resulting mode, and makes it the roll window's default button.
+ */
+export function mergeRollMode(config, dialog, reasons) {
   const roll0 = config.rolls?.[0]?.options ?? {};
   const ac5e = game.modules.get(AC5E_ID)?.active ? roll0[AC5E_ID] : null;
   const priorAdvantage = ac5e ? !!ac5e.hasTransitAdvantage : !!(roll0.advantage || config.advantage);
@@ -346,19 +358,16 @@ export function onPreRollAttack(config, dialog, message) {
     dialog.options ??= {};
     dialog.options.defaultButton = finalMode === modes.ADVANTAGE ? "advantage" : finalMode === modes.DISADVANTAGE ? "disadvantage" : "normal";
   }
-  reasons.finalMode = finalMode;
-  ensureFinalModeHook();
-  if (message) foundry.utils.setProperty(message, `data.flags.${MODULE_ID}.${ATTACK_REASONS_FLAG}`, reasons);
-  debug(`attack reasons: +[${reasons.advantage.join(", ")}] −[${reasons.disadvantage.join(", ")}] → mode ${finalMode}`);
+  return finalMode;
 }
 
 let finalModeHookRegistered = false;
 /**
- * Registered on the first attack — after every module's setup, so after Automated
- * Conditions 5e's own dnd5e.postRollConfiguration handler, which re-applies its verdict
+ * Registered on the first attack or save with reasons — after every module's setup, so after
+ * Automated Conditions 5e's own dnd5e.postRollConfiguration handler, which re-applies its verdict
  * to the built roll. This one runs last and keeps the combined verdict.
  */
-function ensureFinalModeHook() {
+export function ensureFinalModeHook() {
   if (finalModeHookRegistered) return;
   finalModeHookRegistered = true;
   Hooks.on("dnd5e.postRollConfiguration", applyFinalAttackMode);
@@ -369,7 +378,8 @@ function ensureFinalModeHook() {
  * advantage / disadvantage on the built d20 (a choice made in the window stands).
  */
 export function applyFinalAttackMode(rolls, config, dialog, message) {
-  const reasons = message?.data?.flags?.[MODULE_ID]?.[ATTACK_REASONS_FLAG];
+  const flags = message?.data?.flags?.[MODULE_ID];
+  const reasons = flags?.[ATTACK_REASONS_FLAG] ?? flags?.[SAVE_REASONS_FLAG];
   if (!reasons || typeof reasons.finalMode !== "number" || dialog?.configure !== false) return;
   const roll = rolls?.[0];
   const d20 = roll?.d20;

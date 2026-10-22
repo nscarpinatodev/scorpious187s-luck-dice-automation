@@ -10,7 +10,7 @@ export async function requestApplyDamage(damageMessage, targets, { outcomeKey } 
   const payload = {
     messageId: damageMessage.id,
     outcomeKey,
-    targets:   targets.map(({ actor, token, name, multiplier, saved, hits, luck }) => ({ actor, token, name, multiplier, saved, hits, luck }))
+    targets:   targets.map(({ actor, token, name, multiplier, saved, hits, luck, notes }) => ({ actor, token, name, multiplier, saved, hits, luck, notes }))
   };
   if (game.user.isGM) return applyCardDamage(payload);
 
@@ -61,6 +61,8 @@ export async function applyCardDamage({ messageId, targets, outcomeKey }) {
     if (!Number.isFinite(target.hits) && getReactionPrompts() !== "off") {
       ({ damages: cardDamages, notes } = await damageReactions(message, target, damages));
     }
+    // What changed the damage before it got here (Evasion), shown with the reactions.
+    if (Array.isArray(target.notes)) notes = [...target.notes.map(String), ...notes];
     // Each instance of damage this target takes: the whole card once, or per projectile.
     const instances = Number.isFinite(target.hits)
       ? Array.from({ length: Math.max(1, Math.floor(target.hits)) }, (_, i) => (target.luck && i === 0) ? damages : baseDamages)

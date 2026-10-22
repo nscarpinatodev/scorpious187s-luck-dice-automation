@@ -283,6 +283,8 @@ function isCritDiceMaximized() {
 //   total(), hitState()                current attack total; true / false / null
 //   reroll(evaluate, label), addDice(n) apply luck to the roll and record it
 //   finish()                           stamp the final HIT / MISS in the history
+//   extras, roll(), applyExtra(out)    optional (native mode): other ways to change the roll —
+//                                      see promptLuckOnCheckFail — the current roll, and recording one
 
 /** Attack adapter over a Midi workflow. */
 function midiAttack(workflow) {
@@ -318,8 +320,9 @@ async function promptLuckOnMiss(attack) {
       const impactAvail = luckEnabled ? getDiceUses(actor, IMPACT_DICE_ITEM_NAME) : 0;
       const totalAvail  = luckAvail + impactAvail;
       const hasInsp     = isInspirationEnabled() && actorHasInspiration(actor);
+      const extraOpts   = attack.extras?.options({ added: diceAdded }) ?? [];
 
-      if (totalAvail <= 0 && !hasInsp) { debug("promptLuckOnMiss: no dice or inspiration available, exiting"); return; }
+      if (totalAvail <= 0 && !hasInsp && !extraOpts.length) { debug("promptLuckOnMiss: no dice or inspiration available, exiting"); return; }
 
       console.log(`[${MODULE_ID}] promptLuckOnMiss: luck=${luckAvail} impact=${impactAvail} total=${totalAvail} inspiration=${hasInsp} diceAdded=${diceAdded}`);
       state.attackPrompted = true;
@@ -328,15 +331,26 @@ async function promptLuckOnMiss(attack) {
       if (hasInsp)                       options.push({ action: "inspiration", label: "Use Inspiration (Reroll)" });
       if (totalAvail >= 2 && !diceAdded) options.push({ action: "reroll",      label: "Spend 2 Dice to Reroll" });
       if (totalAvail > 0)                options.push({ action: "add",         label: `Add Dice (1–${totalAvail}d6)` });
+      options.push(...extraOpts);
       options.push({ action: "decline", label: "Keep Miss" });
 
+      const showDice = luckEnabled && actorHasLuckDice(actor);
       const action = await promptChoice(
         "Missed Attack",
-        `<p>Your attack missed with a <strong>${attack.total()}</strong>. What would you like to do?</p>${luckEnabled ? buildDiceAvailableHTML(actor) : ""}`,
+        `<p>Your attack missed with a <strong>${attack.total()}</strong>. What would you like to do?</p>${showDice ? buildDiceAvailableHTML(actor) : ""}`,
         options
       );
       console.log(`[${MODULE_ID}] promptLuckOnMiss: player chose "${action}"`);
       if (action === "decline" || !action) return;
+
+      if (attack.extras?.handles(action)) {
+        const out = await attack.extras.run(action, attack.roll());
+        if (!out) continue;
+        await attack.applyExtra(out);
+        if (out.bonusRoll) diceAdded = true;
+        markIfConverted(attack);
+        continue;
+      }
 
       if (action === "inspiration") {
         await consumeInspiration(actor);
@@ -444,11 +458,15 @@ async function promptNatOne(attack) {
   const impactAvail = luckEnabled ? getDiceUses(actor, IMPACT_DICE_ITEM_NAME) : 0;
   const totalAvail  = luckAvail + impactAvail;
   const hasInsp     = isInspirationEnabled() && actorHasInspiration(actor);
+  // A natural 1 misses whatever is added, so only extras that replace the d20 (Lucky) can help.
+  const extraOpts   = attack.extras?.options({ added: false, autoMiss: true }) ?? [];
+  // Native mode offers extras to creatures without Luck Dice: no die to regain for them.
+  const hasLuck     = luckEnabled && (!attack.extras || actorHasLuckDice(actor));
 
   // No options at all — auto-regain if luck dice are enabled and the actor has them.
-  if (totalAvail < 2 && !hasInsp) {
+  if (totalAvail < 2 && !hasInsp && !extraOpts.length) {
     debug("promptNatOne: fewer than 2 dice available and no inspiration — auto-regaining 1 Luck Die");
-    if (luckEnabled) {
+    if (hasLuck) {
       await updateLuckUses(actor, 1);
       await whisperLuckRegain(actor, "natural 1 with no dice to reroll");
     }
@@ -458,15 +476,28 @@ async function promptNatOne(attack) {
   const options = [];
   if (hasInsp)         options.push({ action: "inspiration", label: "Use Inspiration (Reroll)" });
   if (totalAvail >= 2) options.push({ action: "reroll",      label: "Spend 2 Dice to Reroll" });
-  options.push({ action: "keep", label: luckEnabled ? "Keep Miss (Regain 1 Luck Die)" : "Keep Miss" });
+  options.push(...extraOpts);
+  options.push({ action: "keep", label: hasLuck ? "Keep Miss (Regain 1 Luck Die)" : "Keep Miss" });
 
   const action = await promptChoice(
     "Natural 1!",
-    `<p>You rolled a natural 1. What would you like to do?</p>${luckEnabled ? buildDiceAvailableHTML(actor) : ""}`,
+    `<p>You rolled a natural 1. What would you like to do?</p>${hasLuck ? buildDiceAvailableHTML(actor) : ""}`,
     options
   );
 
   console.log(`[${MODULE_ID}] promptNatOne: player chose "${action}"`);
+
+  if (attack.extras?.handles(action)) {
+    const out = await attack.extras.run(action, attack.roll());
+    if (out) {
+      await attack.applyExtra(out);
+      markIfConverted(attack);
+    }
+    // Still missing — continue in the miss prompt, which adds to the same history.
+    if (attack.hitState() === false) return promptLuckOnMiss(attack);
+    await attack.finish();
+    return;
+  }
 
   if (action === "inspiration") {
     await consumeInspiration(actor);
@@ -489,7 +520,7 @@ async function promptNatOne(attack) {
     return;
   }
 
-  if (luckEnabled) {
+  if (hasLuck) {
     await updateLuckUses(actor, 1);
     await whisperLuckRegain(actor, "kept natural 1 miss");
   }

@@ -11,7 +11,8 @@ import { MODULE_ID, getPrivateRollOutcome, isEffectAutomationEnabled, socket, ge
 // successful save", those who pass. They're applied through dnd5e's own effects
 // tray code, so they carry the same origin, spell scaling and concentration link
 // as a click on the tray: an effect tied to concentration ends with it, and a
-// repeat re-enables the existing copy instead of stacking a second one.
+// repeat re-enables the existing copy instead of stacking a second one. An effect
+// that only applies conditions the target is immune to is skipped (noted "immune").
 // Changing other actors needs the GM: the primary GM's client applies them.
 
 /** The usage card a roll card belongs to, if it lists effects. */
@@ -59,7 +60,14 @@ export async function applyActivityEffects({ usageId, targets }) {
     if (!actor) continue;
     const names = [];
     const undo  = [];
+    const immunities = actor.system?.traits?.ci?.value;
     for (const effect of effects.filter(e => target.effectIds?.includes(e.id))) {
+      // Conditions the creature is immune to (dnd5e would ignore them, but still show the effect).
+      const statuses = [...(effect.statuses ?? [])];
+      if (statuses.length && statuses.every(s => immunities?.has?.(s))) {
+        names.push(`${effect.name} (immune)`);
+        continue;
+      }
       try {
         // dnd5e re-enables an existing copy instead of creating a second one, so
         // note which it was: Undo deletes a created copy, re-disables an enabled one.

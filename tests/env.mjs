@@ -9,7 +9,7 @@ const MODULE_ID = "scorpious187s-luck-dice-automation";
 export const settings = {
   attackAutomation: "off", saveAutomation: "off", privateRollOutcome: "private",
   effectAutomation: false, healingAutomation: false, damageOnlyAutomation: false,
-  concentrationBreak: false, concentrationAutoRoll: false, onHitRiders: false, lingeringAreas: false, repeatSaves: false, reactionPrompts: "off", skipAttackDialog: false, attackAdvantage: false, legendaryResistance: "off", weaponMastery: false, autoCrits: false, opportunityAttacks: false, retaliation: false, deathSaves: false, clearInstantAreas: false, turnSummary: false, wallSpells: false, rayAutomation: false, targetConfirmation: "off",
+  concentrationBreak: false, concentrationAutoRoll: false, onHitRiders: false, lingeringAreas: false, repeatSaves: false, reactionPrompts: "off", skipAttackDialog: false, attackAdvantage: false, legendaryResistance: "off", weaponMastery: false, autoCrits: false, opportunityAttacks: false, retaliation: false, deathSaves: false, clearInstantAreas: false, turnSummary: false, wallSpells: false, rayAutomation: false, targetConfirmation: "off", saveRules: false, rollBoosts: false,
   luckDice: true, inspiration: false,
   dnd5e: { disableConcentration: false, allowPlayerDamageTray: false }
 };
@@ -175,6 +175,7 @@ const LDA = {
   isWeaponMasteryEnabled: () => settings.weaponMastery, isAutoCritsEnabled: () => settings.autoCrits,
   isOpportunityAttacksEnabled: () => settings.opportunityAttacks, isRetaliationEnabled: () => settings.retaliation, isDeathSavesEnabled: () => settings.deathSaves, isClearInstantAreasEnabled: () => settings.clearInstantAreas, isTurnSummaryEnabled: () => settings.turnSummary, isWallSpellsEnabled: () => settings.wallSpells,
   isRayAutomationEnabled: () => settings.rayAutomation, getTargetConfirmation: () => settings.targetConfirmation,
+  isSaveRulesEnabled: () => settings.saveRules, isRollBoostsEnabled: () => settings.rollBoosts,
   readCardHistory: () => ({ entries: [] }), updateRollCard: async () => {}, recordCardStep: async () => {},
   finishCardHistory: async () => {}, cardReporter: () => noop,
   promptNatOne: async () => {}, promptLuckOnMiss: async () => {}, promptNatOneSave: async () => {}, promptLuckOnCheckFail: async () => {}
@@ -265,7 +266,7 @@ export function reset() {
   Object.assign(settings, {
     attackAutomation: "off", saveAutomation: "off", privateRollOutcome: "private",
     effectAutomation: false, healingAutomation: false, damageOnlyAutomation: false,
-    concentrationBreak: false, concentrationAutoRoll: false, onHitRiders: false, lingeringAreas: false, repeatSaves: false, reactionPrompts: "off", skipAttackDialog: false, attackAdvantage: false, legendaryResistance: "off", weaponMastery: false, autoCrits: false, opportunityAttacks: false, retaliation: false, deathSaves: false, clearInstantAreas: false, turnSummary: false, wallSpells: false, rayAutomation: false, targetConfirmation: "off"
+    concentrationBreak: false, concentrationAutoRoll: false, onHitRiders: false, lingeringAreas: false, repeatSaves: false, reactionPrompts: "off", skipAttackDialog: false, attackAdvantage: false, legendaryResistance: "off", weaponMastery: false, autoCrits: false, opportunityAttacks: false, retaliation: false, deathSaves: false, clearInstantAreas: false, turnSummary: false, wallSpells: false, rayAutomation: false, targetConfirmation: "off", saveRules: false, rollBoosts: false
   });
   settings.dnd5e.disableConcentration = false;
 }

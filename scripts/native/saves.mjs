@@ -4,6 +4,7 @@
 import { requestApplyDamage } from "./apply.mjs";
 import { applySaveEffects } from "./effects.mjs";
 import { clearAreasForUse } from "./areas.mjs";
+import { evasionApplies } from "./save-rules.mjs";
 import { MODULE_ID, debug, promptChoice, getSaveAutomation, escapeHTML, pendingLuckDamage, socket, pendingLuckChecks, pendingSaveRequests, getPrimaryGM, activePlayerOwner, abilityLabel, resolveTarget, NO_DIALOG } from "./shared.mjs";
 import { tokensInActivityArea, chooseAffected, regionsOf, needsConfirmation, confirmTargets } from "./targeting.mjs";
 
@@ -262,8 +263,14 @@ export async function applySaveDamage(activity, targets, outcome, usage = null) 
 
   const onSave = activity.damage?.onSave ?? "half";
   const savedMultiplier = { none: 0, half: 0.5, full: 1 }[onSave] ?? 0.5;
-  await requestApplyDamage(damageMessage, rolled.map(t => {
+  const ability = saveOf(activity)?.ability;
+  const list = [];
+  for (const t of rolled) {
     const saved = !!outcome.get(t.token).passed;
-    return { ...t, saved, multiplier: saved ? savedMultiplier : 1 };
-  }), { outcomeKey: usage?.id });
+    // Evasion (the "saveRules" setting): none on a success, half on a failure.
+    if (evasionApplies((await resolveTarget(t)).actor, ability, onSave)) {
+      list.push({ ...t, saved, multiplier: saved ? 0 : 0.5, notes: ["Evasion"] });
+    } else list.push({ ...t, saved, multiplier: saved ? savedMultiplier : 1 });
+  }
+  await requestApplyDamage(damageMessage, list, { outcomeKey: usage?.id });
 }
