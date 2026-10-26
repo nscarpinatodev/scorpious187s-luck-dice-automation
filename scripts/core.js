@@ -690,12 +690,15 @@ Hooks.once("init", () => {
   });
 
   game.settings.register(MODULE_ID, "attackAdvantage", {
-    name: "Advantage & Disadvantage on Attacks",
-    hint: "Check each attack for the obvious reasons: ranged with an enemy within 5 ft, long range (beyond long range " +
-          "the attack is cancelled), the attacker's or target's conditions (Prone, Restrained, Blinded, Invisible, " +
-          "Paralyzed, Stunned, Unconscious, Petrified, Dodging, Frightened with its source in sight), Reckless Attack, " +
-          "Faerie Fire, Guiding Bolt and Heavy weapons. Shown in the roll window and on the card. With Automated " +
-          "Conditions 5e active, the checks it performs are left to it.",
+    name: "Attack Rules",
+    hint: "Check each attack for the obvious reasons for advantage or disadvantage: ranged with an enemy within 5 ft, " +
+          "long range (beyond long range the attack is cancelled), the attacker's or target's conditions (Prone, " +
+          "Restrained, Blinded, Invisible, Paralyzed, Stunned, Unconscious, Petrified, Dodging, Frightened with its source " +
+          "in sight), Reckless Attack, Faerie Fire, Guiding Bolt and Heavy weapons. And the attack feats: Crossbow " +
+          "Expert, Gunner, Sharpshooter and Spell Sniper (range, enemies within 5 ft); Spell Sniper and Sharpshooter " +
+          "ignore half and three-quarters cover (taken off the target's AC); 2024 Crossbow Expert's off-hand crossbow damage. " +
+          "Shown in the roll window and on the card. With Automated Conditions 5e active, the checks it performs are " +
+          "left to it, except where its feats differ from the rules (Gunner, 2024 Crossbow Expert).",
     scope: "world",
     config: true,
     type: Boolean,

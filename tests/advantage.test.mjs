@@ -233,3 +233,109 @@ test("the hook: advantage / disadvantage set, reasons on the card; several targe
   onPreRollAttack(off, {}, {});
   assert.equal(off.advantage, undefined);
 });
+
+// ── Attack feats ──
+import { onPreRollDamageFeats } from "../scripts/native/advantage.mjs";
+
+const fireBolt = (level = 0, sourceClass = "") => ({ type: "spell", name: "Fire Bolt", system: { level, sourceClass, range: { value: 120, units: "ft" } } });
+const withCover = (c, cover) => { c.actor.system.attributes = { ac: { cover } }; return c; };
+function withAC5E(settingsMap, fn) {
+  game.modules.set("automated-conditions-5e", { active: true });
+  const get = game.settings.get;
+  game.settings.get = (scope, key) => scope === "automated-conditions-5e" ? settingsMap[key] : get(scope, key);
+  try { return fn(); } finally { game.settings.get = get; game.modules.delete("automated-conditions-5e"); }
+}
+
+test("Gunner: no disadvantage from an enemy within 5 ft on any ranged attack, spells too", () => {
+  const me = creature("Me", 0, 0, { disposition: 1, items: [item("gunner", { rules: "2014" })] });
+  creature("Foe", 1, 0);
+  target(creature("Far", 6, 0));
+  const r = attackReasons(attack(me, { item: fireBolt(), classification: "spell" }));
+  assert.deepEqual(r.disadvantage, []);
+  assert.deepEqual(r.ignored, ["Foe within 5 ft (Gunner)"]);
+});
+
+test("Spell Sniper range: doubled (2014), +60 ft (2024)", () => {
+  const cast = (feats, col) => {
+    env.reset(); settings.attackAdvantage = true;
+    const me = creature("Me", 0, 0, { disposition: 1, items: feats });
+    target(creature("Far", col, 0));
+    return attackReasons(attack(me, { item: fireBolt(), classification: "spell" })).cancel;
+  };
+  assert.match(cast([], 30), /out of range/);                                       // 150 ft of 120
+  assert.equal(cast([item("spell-sniper", { rules: "2014" })], 30), null);         // of 240
+  assert.equal(cast([item("spell-sniper", { rules: "2024" })], 30), null);         // of 180
+  assert.match(cast([item("spell-sniper", { rules: "2024" })], 40), /200 of 180/);
+});
+
+test("ignoring cover: Spell Sniper and Sharpshooter, half and three-quarters; total cover stands", () => {
+  const reasonsFor = (feats, it, classification, cover, actorExtra = {}) => {
+    env.reset(); settings.attackAdvantage = true;
+    const me = creature("Me", 0, 0, { disposition: 1, items: feats });
+    Object.assign(me.actor, actorExtra);
+    target(withCover(creature("Them", 4, 0), cover));
+    return attackReasons(attack(me, { item: it, classification }));
+  };
+  const ignoredCover = (r) => r.coverIgnored.map(c => c.bonus);
+  assert.deepEqual(ignoredCover(reasonsFor([item("spell-sniper")], fireBolt(), "spell", 5)), [5]);
+  assert.deepEqual(ignoredCover(reasonsFor([item("sharpshooter", { rules: "2014" })], weapon(), "weapon", 2)), [2]);
+  assert.deepEqual(ignoredCover(reasonsFor([], weapon(), "weapon", 2)), []);
+  assert.deepEqual(ignoredCover(reasonsFor([item("spell-sniper")], weapon(), "weapon", 2)), []);     // weapons aren't spells
+  assert.deepEqual(ignoredCover(reasonsFor([item("spell-sniper")], fireBolt(), "spell", 0)), []);    // no cover (or total: no bonus)
+  assert.deepEqual(ignoredCover(reasonsFor([item("sniper")], fireBolt(), "spell", 2)), []);          // Valda's Sniper isn't automated
+});
+
+test("the hook takes ignored cover off the card's target AC and the roll's own target", () => {
+  const me = creature("Me", 0, 0, { disposition: 1, items: [item("spell-sniper")] });
+  const them = withCover(creature("Them", 4, 0), 5);
+  target(them);
+  const config = { subject: attack(me, { item: fireBolt(), classification: "spell" }), target: 18, rolls: [{ options: { target: 18 } }] };
+  const message = { data: { system: { targets: [{ token: them.doc.uuid, name: "Them", ac: 18 }] } } };
+  onPreRollAttack(config, {}, message);
+  assert.equal(message.data.system.targets[0].ac, 13);
+  assert.equal(config.target, 13);
+  assert.equal(config.rolls[0].options.target, 13);
+  assert.deepEqual(message.data.flags[MODULE_ID][ATTACK_REASONS_FLAG].ignored, ["Them's cover (Spell Sniper)"]);
+  assert.equal(config.advantage, false);                        // nothing else changed
+});
+
+test("with AC5E checking nearby enemies: Gunner takes its disadvantage back; 2024 Crossbow Expert only lets crossbows off", () => {
+  const ac5e = { autoRangeChecks: new Set(["rangedNearbyFoes"]) };
+  withAC5E(ac5e, () => {
+    const gunner = creature("Gunner", 0, 0, { disposition: 1, items: [item("gunner", { rules: "2014" })] });
+    creature("Foe", 1, 0);
+    target(creature("Far", 6, 0));
+    const ac5eState = { subject: { disadvantage: ["AC5E.NearbyFoe"] }, opponent: { disadvantage: [] }, hasTransitDisadvantage: true };
+    const config = { subject: attack(gunner), rolls: [{ options: { "automated-conditions-5e": ac5eState } }] };
+    onPreRollAttack(config, {}, {});
+    assert.deepEqual(ac5eState.subject.disadvantage, []);
+    assert.equal(ac5eState.hasTransitDisadvantage, false);
+    assert.equal(config.disadvantage, false);
+
+    // Another source of disadvantage stays.
+    const blinded = { subject: { disadvantage: ["AC5E.NearbyFoe", "Blinded"] }, hasTransitDisadvantage: true };
+    const second = { subject: attack(gunner), rolls: [{ options: { "automated-conditions-5e": blinded } }] };
+    onPreRollAttack(second, {}, {});
+    assert.equal(second.disadvantage, true);
+
+    const expert = creature("Expert", 10, 10, { disposition: 1, items: [item("crossbow-expert", { rules: "2024" })] });
+    creature("Foe2", 11, 10);
+    target(creature("Far2", 16, 10));
+    assert.deepEqual(attackReasons(attack(expert)).disadvantage, ["Ranged attack with Foe2 within 5 ft"]);          // a longbow
+    assert.deepEqual(attackReasons(attack(expert, { item: weapon({ baseItem: "heavycrossbow" }) })).disadvantage, []); // AC5E lets it off
+  });
+});
+
+test("2024 Crossbow Expert: an off-hand hand crossbow adds its ability modifier to the damage", () => {
+  const handCrossbow = weapon({ baseItem: "handcrossbow", properties: ["lgt"], type: "simpleR" });
+  const roll = (feats, attackMode = "offhand", parts = ["1d6"]) => {
+    const me = creature("Me", 0, 0, { disposition: 1, items: feats });
+    const config = { subject: attack(me, { item: handCrossbow }), attackMode, rolls: [{ base: true, parts: [...parts] }] };
+    onPreRollDamageFeats(config);
+    return config.rolls[0].parts;
+  };
+  assert.deepEqual(roll([item("crossbow-expert", { rules: "2024" })]), ["1d6", "@mod"]);
+  assert.deepEqual(roll([item("crossbow-expert", { rules: "2014" })]), ["1d6"]);
+  assert.deepEqual(roll([item("crossbow-expert", { rules: "2024" })], "oneHanded"), ["1d6"]);
+  assert.deepEqual(roll([item("crossbow-expert", { rules: "2024" })], "offhand", ["1d6", "@mod"]), ["1d6", "@mod"]);
+});

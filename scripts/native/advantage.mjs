@@ -14,7 +14,12 @@
 //                Unconscious, Petrified, Invisible, or Dodging;
 //   features   — Reckless Attack (the attacker's Strength attacks; attacks against
 //                a reckless creature), Faerie Fire, Guiding Bolt (its mark is used
-//                up by the attack), a Heavy weapon in small or weak hands.
+//                up by the attack), a Heavy weapon in small or weak hands;
+//   feats      — Spell Sniper (range; 2024: enemies within 5 ft), Crossbow Expert and
+//                Gunner (enemies within 5 ft), Sharpshooter (long range; 2024: enemies
+//                within 5 ft); Spell Sniper and Sharpshooter ignore half and
+//                three-quarters cover — its bonus is taken off the target's AC on the card. 2024
+//                Crossbow Expert's off-hand crossbow adds its modifier to the damage.
 // dnd5e itself already covers Poisoned, encumbrance and exhaustion. Any advantage
 // plus any disadvantage is a normal roll, so these combine safely with other
 // sources. When Automated Conditions 5e (AC5E) is active, each check it performs
@@ -153,31 +158,67 @@ export function attackFacts(activity, config = {}) {
   };
 }
 
-/** The weapon's or activity's range in scene units: { normal, long } or null when it has none. */
+/**
+ * The weapon's or activity's range in scene units: { normal, long } or null when it has none.
+ * Spell Sniper extends a spell attack's range: doubled (2014), or 60 ft more for a range of 10 ft
+ * or more (2024).
+ */
 function rangeOf(fx) {
   const range = fx.item?.type === "weapon" ? fx.item.system?.range : fx.activity?.range;
-  const normal = Number(range?.value);
+  let normal = Number(range?.value);
   if (!Number.isFinite(normal) || normal <= 0) return null;
   const units = String(range?.units ?? "ft").toLowerCase();
   const sceneUnits = String(canvas?.scene?.grid?.units ?? canvas?.grid?.units ?? "ft").toLowerCase();
   const norm = (u) => ({ feet: "ft", foot: "ft", meters: "m", meter: "m", metres: "m", metre: "m" })[u] ?? u;
   if (!["ft", "m"].includes(norm(units)) || norm(units) !== norm(sceneUnits)) return null;
   const long = Number(range?.long);
+  const spellSniper = fx.spell ? hasFeat(fx.actor, "spell-sniper") : null;
+  if (spellSniper) {
+    const feet = norm(units) === "ft" ? 1 : 0.3;
+    if (rulesOf(spellSniper) === "2014") normal *= 2;
+    else if (normal >= 10 * feet) normal += 60 * feet;
+  }
   return { normal, long: Number.isFinite(long) && long > normal ? long : null };
 }
 
 const adjacent = () => canvas?.grid?.distance ?? 5;
 const isCrossbow = (item) => /crossbow/i.test(String(item?.system?.type?.baseItem ?? item?.name ?? ""));
 
-/** Feats that let this ranged attack ignore an enemy within 5 ft. */
-function ignoresNearbyFoes(fx) {
+/**
+ * The feat that lets this ranged attack ignore an enemy within 5 ft, by its rules: Crossbow Expert
+ * (2014: any ranged attack; 2024: crossbows), Gunner (any ranged attack), Sharpshooter 2024
+ * (weapons), Spell Sniper 2024 (spells). Null when none does.
+ */
+function nearbyFoeExemption(fx) {
   const crossbowExpert = hasFeat(fx.actor, "crossbow-expert");
-  if (crossbowExpert && (rulesOf(crossbowExpert) === "2014" || isCrossbow(fx.item))) return true;
+  if (crossbowExpert && (rulesOf(crossbowExpert) === "2014" || isCrossbow(fx.item))) return "Crossbow Expert";
+  if (hasFeat(fx.actor, "gunner")) return "Gunner";
   const sharpshooter = hasFeat(fx.actor, "sharpshooter");
-  if (sharpshooter && rulesOf(sharpshooter) === "2024" && fx.weapon) return true;
-  if (hasFeat(fx.actor, "gunner") && fx.weapon) return true;
+  if (sharpshooter && rulesOf(sharpshooter) === "2024" && fx.weapon) return "Sharpshooter";
   const spellSniper = hasFeat(fx.actor, "spell-sniper");
-  return !!(spellSniper && rulesOf(spellSniper) === "2024" && fx.spell);
+  return spellSniper && rulesOf(spellSniper) === "2024" && fx.spell ? "Spell Sniper" : null;
+}
+
+/**
+ * Whether Automated Conditions 5e's own nearby-foe check lets this attack off: it knows Crossbow Expert
+ * (for every ranged attack, whatever its rules) and the 2024 Sharpshooter and Spell Sniper, not Gunner.
+ */
+function ac5eExemptsNearbyFoe(fx) {
+  if (hasFeat(fx.actor, "crossbow-expert")) return true;
+  const modern = (identifier) => { const feat = hasFeat(fx.actor, identifier); return feat && rulesOf(feat) === "2024"; };
+  return fx.spell ? !!modern("spell-sniper") : !!modern("sharpshooter");
+}
+
+/**
+ * The feat that lets this attack ignore cover, and how much of it: { feat, bonuses } — the cover
+ * bonuses it ignores (half +2, three-quarters +5). Spell Sniper: spell attacks (2014: ranged ones);
+ * Sharpshooter: ranged weapon attacks. Total cover always stands. Null when neither applies.
+ */
+export function coverBypass(fx) {
+  const spellSniper = fx.spell ? hasFeat(fx.actor, "spell-sniper") : null;
+  if (spellSniper && (rulesOf(spellSniper) === "2024" || fx.ranged)) return { feat: "Spell Sniper", bonuses: [2, 5] };
+  if (fx.weapon && fx.ranged && hasFeat(fx.actor, "sharpshooter")) return { feat: "Sharpshooter", bonuses: [2, 5] };
+  return null;
 }
 
 /** An active enemy within 5 ft of the attacker, if any. */
@@ -208,7 +249,7 @@ function frightenedBySeenSource(fx) {
 export function attackReasons(activity, config = {}) {
   const fx = attackFacts(activity, config);
   const covers = ac5eCovers();
-  const advantage = [], disadvantage = [], consume = [];
+  const advantage = [], disadvantage = [], consume = [], ignored = [], dropAc5e = [];
   let cancel = null;
   const target = fx.target, targetActor = target?.actor;
   const has = (actor, status) => !!actor?.statuses?.has?.(status);
@@ -225,11 +266,30 @@ export function attackReasons(activity, config = {}) {
         disadvantage.push("Long range");
       }
     }
-    if (!covers.nearbyFoes && !ignoresNearbyFoes(fx)) {
-      const foe = nearbyFoe(fx);
-      if (foe) disadvantage.push(`Ranged attack with ${foe.name} within 5 ft`);
+    // An enemy within 5 ft. When AC5E checks it, only where its feat list and the rules differ:
+    // Gunner (it doesn't know it — its disadvantage is taken back), 2024 Crossbow Expert with
+    // anything but a crossbow (it lets every ranged attack off).
+    const foe = nearbyFoe(fx);
+    if (foe) {
+      const exemption = nearbyFoeExemption(fx);
+      const disadvantageReason = `Ranged attack with ${foe.name} within 5 ft`;
+      if (!covers.nearbyFoes) {
+        if (exemption) ignored.push(`${foe.name} within 5 ft (${exemption})`);
+        else disadvantage.push(disadvantageReason);
+      } else if (exemption && !ac5eExemptsNearbyFoe(fx)) {
+        ignored.push(`${foe.name} within 5 ft (${exemption})`);
+        dropAc5e.push("nearbyFoe");
+      } else if (!exemption && ac5eExemptsNearbyFoe(fx)) {
+        disadvantage.push(disadvantageReason);
+      }
     }
   }
+
+  // Cover the attacker's feat ignores (Spell Sniper, Sharpshooter): taken off those targets' AC.
+  const bypass = coverBypass(fx);
+  const coverIgnored = bypass ? fx.targets.map(t => ({ token: t.uuid, name: t.name, bonus: Number(t.actor?.system?.attributes?.ac?.cover ?? 0) }))
+    .filter(t => bypass.bonuses.includes(t.bonus)) : [];
+  if (coverIgnored.length) ignored.push(`${coverIgnored.map(t => t.name).join(", ")}'s cover (${bypass.feat})`);
 
   // Conditions.
   if (!covers.statuses) {
@@ -271,7 +331,7 @@ export function attackReasons(activity, config = {}) {
     if (reason) disadvantage.push(reason);
   }
 
-  return { advantage, disadvantage, cancel, consume };
+  return { advantage, disadvantage, cancel, consume, ignored, dropAc5e, coverIgnored };
 }
 
 /** Weapon Mastery marks (mastery.mjs): Sap on the attacker, Vex against this target. Used up by the attack. */
@@ -287,7 +347,7 @@ function addMasteryReasons(fx, { advantage, disadvantage, consume }) {
 /** Only the Weapon Mastery reasons (when the advantage setting is off but Weapon Mastery is on). */
 export function masteryReasons(activity, config = {}) {
   const fx = attackFacts(activity, config);
-  const reasons = { advantage: [], disadvantage: [], cancel: null, consume: [] };
+  const reasons = { advantage: [], disadvantage: [], cancel: null, consume: [], ignored: [], dropAc5e: [], coverIgnored: [] };
   addMasteryReasons(fx, reasons);
   return reasons;
 }
@@ -323,12 +383,71 @@ export function onPreRollAttack(config, dialog, message) {
     ui.notifications?.warn(`Luck Dice Automation: ${reasons.cancel}`);
     return false;
   }
-  if (!reasons.advantage.length && !reasons.disadvantage.length) return;
+  if (!reasons.advantage.length && !reasons.disadvantage.length && !reasons.ignored?.length) return;
 
+  if (reasons.coverIgnored?.length) bypassCover(config, message, reasons.coverIgnored);
+  if (reasons.dropAc5e?.includes("nearbyFoe")) dropAc5eNearbyFoe(config);
   reasons.finalMode = mergeRollMode(config, dialog, reasons);
   ensureFinalModeHook();
   if (message) foundry.utils.setProperty(message, `data.flags.${MODULE_ID}.${ATTACK_REASONS_FLAG}`, reasons);
   debug(`attack reasons: +[${reasons.advantage.join(", ")}] −[${reasons.disadvantage.join(", ")}] → mode ${reasons.finalMode}`);
+}
+
+/**
+ * Ignored cover: take each target's cover bonus off the AC dnd5e put on the attack card (its targets,
+ * which decide hit or miss) — and off the roll's own target for a single target.
+ */
+function bypassCover(config, message, coverIgnored) {
+  const targets = message?.data?.system?.targets;
+  for (const { token, bonus } of coverIgnored) {
+    const entry = Array.isArray(targets) ? targets.find(t => t.token === token) : null;
+    if (entry && Number.isFinite(entry.ac)) entry.ac -= bonus;
+  }
+  if (Array.isArray(targets) && targets.length === 1 && coverIgnored.length === 1) {
+    const ac = targets[0].ac;
+    if (Number.isFinite(Number(config.target))) config.target = ac;
+    for (const roll of config.rolls ?? []) if (Number.isFinite(Number(roll.options?.target))) roll.options.target = ac;
+  }
+}
+
+/**
+ * Take back Automated Conditions 5e's nearby-foe disadvantage (its entry on the attacker's side), for a
+ * feat it doesn't know. Its verdict stays disadvantage only while some other source of it remains.
+ */
+function dropAc5eNearbyFoe(config) {
+  const ac5e = game.modules.get(AC5E_ID)?.active ? config.rolls?.[0]?.options?.[AC5E_ID] : null;
+  if (!ac5e) return;
+  const label = game.i18n.localize("AC5E.NearbyFoe");
+  const labelOf = (entry) => typeof entry === "string" ? entry : (entry?.label ?? entry?.name ?? "");
+  let removed = false;
+  for (const side of [ac5e.subject, ac5e.opponent]) {
+    const list = side?.disadvantage;
+    if (!Array.isArray(list)) continue;
+    for (let i = list.length - 1; i >= 0; i--) if (labelOf(list[i]) === label) { list.splice(i, 1); removed = true; }
+  }
+  if (!removed) return;
+  const remaining = [ac5e.subject, ac5e.opponent].some(side =>
+    (side?.disadvantage?.length ?? 0) > 0 || (side?.disadvantageNames?.size ?? side?.disadvantageNames?.length ?? 0) > 0);
+  if (!remaining) ac5e.hasTransitDisadvantage = false;
+}
+
+/**
+ * dnd5e.preRollDamageV2 — 2024 Crossbow Expert ("Attack Rules"): the extra attack of the Light property
+ * with a Light crossbow (an off-hand attack) adds the ability modifier to its damage, which dnd5e
+ * leaves off an off-hand attack. Never cancels.
+ */
+export function onPreRollDamageFeats(config) {
+  if (!isAttackAdvantageEnabled()) return;
+  const activity = config?.subject;
+  const item = activity?.item;
+  if (activity?.type !== "attack" || !String(config.attackMode ?? "").endsWith("offhand")) return;
+  if (item?.type !== "weapon" || !isCrossbow(item) || !item.system?.properties?.has?.("lgt")) return;
+  const feat = hasFeat(activity.actor, "crossbow-expert");
+  if (!feat || rulesOf(feat) !== "2024") return;
+  const base = config.rolls?.find(r => r?.base) ?? config.rolls?.[0];
+  if (!base || (base.parts ?? []).some(p => String(p).includes("@mod"))) return;
+  (base.parts ??= []).push("@mod");
+  debug(`crossbow expert: ${activity.actor.name}'s off-hand ${item.name} adds its ability modifier`);
 }
 
 /**
@@ -395,7 +514,8 @@ export function reasonsHTML(reasons) {
   const part = (label, list) => list?.length ? `<strong>${label}:</strong> ${list.map(escapeHTML).join(" · ")}` : "";
   const both = reasons?.advantage?.length && reasons?.disadvantage?.length;
   return [part("Advantage", reasons?.advantage), part("Disadvantage", reasons?.disadvantage)].filter(Boolean).join(" &nbsp; ")
-    + (both ? ` <span style="opacity:0.75">(they cancel)</span>` : "");
+    + (both ? ` <span style="opacity:0.75">(they cancel)</span>` : "")
+    + (reasons?.ignored?.length ? `${reasons.advantage?.length || reasons.disadvantage?.length ? " &nbsp; " : ""}${part("Ignored", reasons.ignored)}` : "");
 }
 
 /** renderAttackRollConfigurationDialog: show the reasons at the top of dnd5e's roll window. */

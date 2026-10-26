@@ -66,7 +66,7 @@ export function injectNativeHistory(message, html) {
     blocks.push(renderLuckSection(history));
   }
   const attackReasons = message.getFlag?.(MODULE_ID, ATTACK_REASONS_FLAG);
-  if (attackReasons?.advantage?.length || attackReasons?.disadvantage?.length) blocks.push(renderAttackReasonsSection(attackReasons));
+  if (attackReasons?.advantage?.length || attackReasons?.disadvantage?.length || attackReasons?.ignored?.length) blocks.push(renderAttackReasonsSection(attackReasons));
   const saveReasons = message.getFlag?.(MODULE_ID, SAVE_REASONS_FLAG);
   if (saveReasons && saveReasonsHTML(saveReasons)) blocks.push(renderSaveReasonsSection(saveReasons));
   const mastery = message.getFlag?.(MODULE_ID, MASTERY_RESULT_FLAG);

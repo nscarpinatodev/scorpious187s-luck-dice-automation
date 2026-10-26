@@ -34,7 +34,7 @@ import { claimRiderUse } from "./riders.mjs";
 import { recordLingeringArea, tagLingeringArea, onTurnChange, onTokenMoved, onRegionChanged } from "./lingering.mjs";
 import { onEffectCreated, onTurnEndRepeatSaves } from "./repeat-saves.mjs";
 import { answerReaction, pendingReactions, onTurnStartReaction } from "./reactions.mjs";
-import { onPreRollAttack, onPreRollDamage, onRenderAttackDialog, consumeAttackMarks, consumeAttackMarkGM } from "./advantage.mjs";
+import { onPreRollAttack, onPreRollDamage, onPreRollDamageFeats, onRenderAttackDialog, consumeAttackMarks, consumeAttackMarkGM } from "./advantage.mjs";
 import { onPreRollSave, onRenderSaveDialog, installAutoFail } from "./save-rules.mjs";
 import { rollExtras, markBoostTargets, markBardicGM, consumeBoostGM, endBoostSpellGM } from "./boosts.mjs";
 import { noResults, rollGMSaves, rollPlayerSave, onActivityUsed } from "./saves.mjs";
@@ -136,6 +136,7 @@ Hooks.once("ready", () => {
   // The last word on whether a roll shows its window (after every type-specific preRoll hook). Never cancels.
   Hooks.on("dnd5e.preRollV2", finalRollDialog);
   Hooks.on("dnd5e.preRollDamageV2", onPreRollDamage); // automatic critical hits; never cancels
+  Hooks.on("dnd5e.preRollDamageV2", onPreRollDamageFeats); // 2024 Crossbow Expert's off-hand damage; never cancels
   Hooks.on("dnd5e.preRollDamageV2", skipAutoRolledDamageDialog); // never cancels
   Hooks.on("dnd5e.rollAttackV2", (rolls) =>
     consumeAttackMarks(rolls?.[0]?.parent).catch(err => console.error(`[${MODULE_ID}] attack marks:`, err)));
