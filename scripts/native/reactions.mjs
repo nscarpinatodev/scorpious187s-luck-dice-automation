@@ -27,15 +27,21 @@
 // Also offered to the creature hit, under the "rollBoosts" setting rather than this one
 // (boosts.mjs), and without using its reaction: the Lucky feat — the attacker rolls another
 // d20 and uses the lower.
+// Invocations, with this setting and the "invocations" one: Rebuke of the Talisman (hit:
+// psychic damage equal to the warlock's proficiency bonus to the attacker, pushed 10 ft
+// away), Tomb of Levistus (damaged: 10 temporary HP per Warlock level first; then
+// Incapacitated, speed 0 and vulnerable to fire until the end of its next turn).
 
 import { requestApplyEffects } from "./effects.mjs";
 import { tokenDistance, hasLineOfSight } from "./advantage.mjs";
-import { bardicDie, luckyFeat, usesLeft, useLuckyAgainst, withExtraD20 } from "./boosts.mjs";
+import { bardicDie, luckyFeat, usesLeft, useLuckyAgainst, withExtraD20, spendUses } from "./boosts.mjs";
+import { answerGift, dealInvocationDamage } from "./invocations.mjs";
+import { applyMasteryChange, pushDestination } from "./mastery.mjs";
 import { answerOpportunity } from "./opportunity.mjs";
 import { answerWallSide } from "./walls.mjs";
 import {
   LDA, MODULE_ID, escapeHTML, promptChoice, getReactionPrompts, socket, getPrimaryGM, activePlayerOwner,
-  resolveTarget, combineRolls, isRollBoostsEnabled, getKeptD20Result
+  resolveTarget, combineRolls, isRollBoostsEnabled, getKeptD20Result, isInvocationsEnabled
 } from "./shared.mjs";
 
 export const REACTIONS_FLAG = "reactions";
@@ -82,8 +88,21 @@ export const REACTIONS = {
     useful: ({ types }) => types.some(t => ELEMENTS.includes(t))
   },
   "parry": { when: "damage", label: () => "Parry (reduce the damage)", useful: ({ melee }) => melee },
-  "hellish-rebuke": { when: "afterDamage", label: (_actor, { attackerName }) => `Hellish Rebuke at ${attackerName}`, useful: ({ attacker }) => !!attacker }
+  "hellish-rebuke": { when: "afterDamage", label: (_actor, { attackerName }) => `Hellish Rebuke at ${attackerName}`, useful: ({ attacker }) => !!attacker },
+  // Invocations: used here (no dnd5e activity needed), spending the invocation's uses where it has them.
+  "rebuke-of-the-talisman": {
+    when: "hit", manual: true, setting: isInvocationsEnabled,
+    label: (actor) => `Rebuke of the Talisman (${prof(actor)} psychic to the attacker, push it 10 ft)`,
+    useful: ({ attackerWithin30 }) => attackerWithin30 !== false
+  },
+  "tomb-of-levistus": {
+    when: "damage", manual: true, setting: isInvocationsEnabled,
+    label: (actor) => `Tomb of Levistus (${tombHP(actor)} temporary HP; then Incapacitated until the end of your next turn)`,
+    useful: () => true
+  }
 };
+
+const tombHP = (actor) => 10 * (Number(actor?.classes?.warlock?.system?.levels ?? 0) || 0);
 
 /** Whether the actor has a spell slot (any level, or pact) left. */
 function hasSpellSlot(actor) {
@@ -105,8 +124,10 @@ export function reactionOptions(actor, context, when = "hit", { ally = false, re
   for (const [identifier, reaction] of Object.entries(REACTIONS)) {
     if (reaction.when !== when || !!reaction.ally !== ally) continue;
     if (reaction.free ? !isRollBoostsEnabled() : !reactions) continue;
+    if (reaction.setting && !reaction.setting()) continue;
     const item = reactionItem(actor, identifier);
     if (!item || !reaction.useful({ ...context, actor })) continue;
+    if (reaction.manual && item.system?.uses?.max && usesLeft(item) <= 0) continue;
     if (item.type === "spell" && (item.system?.level ?? 0) > 0 && !hasSpellSlot(actor)) continue;
     options.push(identifier);
   }
@@ -152,6 +173,7 @@ async function useReaction(item, actor, tokenDoc, { aim } = {}) {
 export async function answerReaction(payload) {
   if (payload?.kind === "opportunity") return answerOpportunity(payload);
   if (payload?.kind === "wallSide") return answerWallSide(payload);
+  if (payload?.kind === "gift") return answerGift(payload);
   const { token, actor: actorUuid, options, attackerName, itemName, total, ac, when = "hit", targetName, types = [], attackerToken } = payload;
   const { tokenDoc, actor } = await resolveTarget({ token, actor: actorUuid });
   if (!actor?.isOwner) return null;
@@ -179,12 +201,21 @@ export async function answerReaction(payload) {
   }
 
   const item = reactionItem(actor, choice);
+  const reaction = REACTIONS[choice];
+  if (reaction.manual) {
+    // An invocation used here: its uses (if it has any) and the reaction.
+    if (item.system?.uses?.max) await spendUses(item, 1);
+    spendReaction(actor);
+    const result = { identifier: choice, label: reaction.label(actor, context), by: name };
+    if (choice === "rebuke-of-the-talisman") result.rebuke = prof(actor);
+    if (choice === "tomb-of-levistus") result.tempHP = tombHP(actor);
+    return result;
+  }
   const aim = attackerToken ? await fromUuid(attackerToken) : null;
   const used = await useReaction(item, actor, tokenDoc, { aim: choice === "hellish-rebuke" ? aim : null });
   if (!used) return null;
   spendReaction(actor);
 
-  const reaction = REACTIONS[choice];
   const result = { identifier: choice, label: reaction.label(actor, context), by: name };
   if (reaction.acBonus) result.acBonus = reaction.acBonus(actor);
   if (reaction.multiplier) result.multiplier = reaction.multiplier;
@@ -259,7 +290,8 @@ export async function offerReactions(message, activity) {
       .filter(t => !t.isMiss);
   };
   const ask = async (who, hit, ally, exclude = []) => {
-    const context = { total: Number(roll?.total ?? 0), ac: hit.ac, critical: !!roll?.isCritical, melee, d20: Number(getKeptD20Result(roll)) };
+    const context = { total: Number(roll?.total ?? 0), ac: hit.ac, critical: !!roll?.isCritical, melee, d20: Number(getKeptD20Result(roll)),
+      attackerWithin30: !!attackerDoc && tokenDistance(who, attackerDoc) <= 30 && hasLineOfSight(who, attackerDoc) };
     const options = reactionOptions(who.actor, context, "hit", { ally, reactions: asksFor(who.actor, mode) })
       .filter(id => !exclude.includes(id));
     if (!options.length) return null;
@@ -287,6 +319,7 @@ export async function offerReactions(message, activity) {
         continue;
       }
       if (answer.acBonus) { const t = targets.find(x => x.token === hit.token); if (t && finite(t.ac)) t.ac += answer.acBonus; }
+      if (answer.rebuke && attackerDoc) await rebuke(targetDoc, attackerDoc, answer.rebuke);
       record.push({ token: hit.token, name: hit.name, reaction: answer.label, by: answer.by,
         ...(answer.multiplier ? { multiplier: answer.multiplier } : {}) });
       break;
@@ -315,6 +348,25 @@ export async function offerReactions(message, activity) {
   await message.update(update);
   console.log(`[${MODULE_ID}] reactions: ${record.map(r => `${r.by ?? r.name} — ${r.reaction}`).join(", ")}`);
 }
+
+/** Rebuke of the Talisman: psychic damage to the attacker, and a push of up to 10 ft away from the wearer. */
+async function rebuke(wearerDoc, attackerDoc, amount) {
+  await dealInvocationDamage(wearerDoc.actor, `Rebuke of the Talisman — ${wearerDoc.name}`, amount, "psychic", [attackerDoc]);
+  const dest = pushDestination(wearerDoc, attackerDoc);
+  if (dest) await applyMasteryChange({ kind: "push", token: attackerDoc.uuid, actor: attackerDoc.actor?.uuid, x: dest.x, y: dest.y });
+}
+
+/** Tomb of Levistus's ice: Incapacitated, speed 0 and vulnerable to fire until the end of the warlock's next turn. */
+export const tombEffect = () => ({
+  name: "Tomb of Levistus", img: "icons/svg/frozen.svg", type: "base", transfer: false, disabled: false,
+  statuses: ["incapacitated"],
+  duration: { value: 1, units: "rounds", expiry: "turnEnd" },
+  system: { changes: [
+    { key: "system.traits.dv.value", type: "add", value: "fire" },
+    { key: "system.attributes.movement.speeds.walk", type: "override", value: 0 }
+  ] },
+  flags: { [MODULE_ID]: { tomb: true } }
+});
 
 /** The damage multiplier a reaction gave this target on an attack card (Uncanny Dodge), if any. */
 export function reactionMultiplier(attackMessage, tokenUuid) {
@@ -346,6 +398,12 @@ export async function damageReactions(message, target, damages) {
   if (!options.length) return { damages, notes: [] };
   const answer = await askReaction(actor, { token: tokenDoc?.uuid ?? target.token, actor: actor.uuid, options, when: "damage", types, attackerName });
   if (!answer?.identifier) return { damages, notes: [] };
+  if (answer.tempHP) {
+    // Tomb of Levistus: the temporary HP take the damage first (this is the GM, applying it); the ice comes after.
+    const temp = Number(actor.system?.attributes?.hp?.temp ?? 0) || 0;
+    if (answer.tempHP > temp) await actor.update({ "system.attributes.hp.temp": answer.tempHP });
+    return { damages, notes: [answer.label], afterApply: () => actor.createEmbeddedDocuments("ActiveEffect", [tombEffect()]) };
+  }
   let adjusted = damages.map(d => ({ ...d, properties: new Set(d.properties ?? []) }));
   if (answer.types?.length) {
     adjusted = adjusted.map(d => answer.types.includes(d.type) ? { ...d, value: Math.floor(d.value / 2) } : d);

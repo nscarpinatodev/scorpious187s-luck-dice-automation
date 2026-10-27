@@ -37,6 +37,8 @@ import { answerReaction, pendingReactions, onTurnStartReaction } from "./reactio
 import { onPreRollAttack, onPreRollDamage, onPreRollDamageFeats, onRenderAttackDialog, consumeAttackMarks, consumeAttackMarkGM } from "./advantage.mjs";
 import { onPreRollSave, onRenderSaveDialog, installAutoFail } from "./save-rules.mjs";
 import { rollExtras, markBoostTargets, markBardicGM, consumeBoostGM, endBoostSpellGM } from "./boosts.mjs";
+import { onPreRollAttackInvocations, onPreRollDamageInvocations, onDamageAppliedGift, onTurnStartCloak, onMaddeningHexUsed } from "./invocations.mjs";
+import { onPreUseMetamagic, onRenderUsageDialog, onMetamagicUsed, onPreRollDamageMetamagic, onPreRollConcentrationMetamagic } from "./metamagic.mjs";
 import { noResults, rollGMSaves, rollPlayerSave, onActivityUsed } from "./saves.mjs";
 import { LDA, MODULE_ID, getPrivateRollOutcome, pendingLuckDamage, pendingAttacks, socket, pendingLuckChecks, pendingSaveRequests, trackPending, setSocket } from "./shared.mjs";
 import { needsConfirmation, needsAttackConfirmation } from "./targeting.mjs";
@@ -125,10 +127,18 @@ Hooks.once("ready", () => {
 
   // Solid barriers (Wall of Force…): no targeting through them. Each returns false only to cancel.
   Hooks.on("dnd5e.preUseActivity", onPreUseActivityWalls);
+  // Metamagic: a sorcerer's spell opens the casting window, with its Metamagic section. Never cancels.
+  Hooks.on("dnd5e.preUseActivity", onPreUseMetamagic);
+  Hooks.on("renderActivityUsageDialog", onRenderUsageDialog);
+  // Invocations and Metamagic on the rolls (Agonizing Blast, Improved Pact Weapon, Transmuted Spell). Never cancel.
+  Hooks.on("dnd5e.preRollDamageV2", onPreRollDamageInvocations);
+  Hooks.on("dnd5e.preRollDamageV2", onPreRollDamageMetamagic);
+  Hooks.on("dnd5e.preRollConcentrationV2", onPreRollConcentrationMetamagic);
   Hooks.on("dnd5e.preRollAttackV2", onPreRollAttackWalls);
   // Advantage / disadvantage reasons first: returns false only to cancel an attack out of range.
   Hooks.on("dnd5e.preRollAttackV2", onPreRollAttack);
   Hooks.on("dnd5e.preRollAttackV2", skipAttackDialog); // never returns false: that would cancel the roll
+  Hooks.on("dnd5e.preRollAttackV2", onPreRollAttackInvocations); // Improved Pact Weapon's +1; never cancels
   Hooks.on("renderAttackRollConfigurationDialog", onRenderAttackDialog);
   // Saving throw rules (concentration saves too): advantage, Aura of Protection, automatic failures. Never cancels.
   Hooks.on("dnd5e.preRollSavingThrowV2", onPreRollSave);
@@ -168,6 +178,9 @@ Hooks.once("ready", () => {
     onActorUpdatedAgathys(actor, changes).catch(err => console.error(`[${MODULE_ID}] armor of agathys:`, err)));
   Hooks.on("dnd5e.preApplyDamage", onPreApplyDamage); // synchronous; never cancels
   Hooks.on("dnd5e.applyDamage", (actor) => onDamageAppliedDeath(actor).catch(err => console.error(`[${MODULE_ID}] death:`, err)));
+  Hooks.on("dnd5e.applyDamage", (actor) => onDamageAppliedGift(actor).catch(err => console.error(`[${MODULE_ID}] gift of the protectors:`, err)));
+  Hooks.on("combatTurnChange", (combat, prior, current) =>
+    onTurnStartCloak(combat, current).catch(err => console.error(`[${MODULE_ID}] cloak of flies:`, err)));
   Hooks.on("dnd5e.postRollDeathSave", onPostRollDeathSave);
   Hooks.on("preDeleteRegion", onPreDeleteRegion); // returns false only to keep a lingering area or a wall spell's
   Hooks.on("deleteRegion", (region) => onRegionDeletedWalls(region).catch(err => console.error(`[${MODULE_ID}] wall spells:`, err)));
@@ -199,6 +212,9 @@ Hooks.once("ready", () => {
   // Synchronous up to the point dnd5e reads usageConfig.subsequentActions, right after.
   Hooks.on("dnd5e.postUseActivity", (activity, usageConfig, results) => {
     if (claimRiderUse(activity, usageConfig)) return; // an on-hit rider spending its slot / uses: its dice go on the hit
+    // Metamagic and Eldritch Spear first: the range, and what the save automation and rolls below read.
+    try { onMetamagicUsed(activity, usageConfig, results); } catch (err) { console.error(`[${MODULE_ID}] metamagic:`, err); }
+    try { onMaddeningHexUsed(activity, usageConfig, results); } catch (err) { console.error(`[${MODULE_ID}] maddening hex:`, err); }
     recordLingeringArea(activity, usageConfig, results).catch(err => console.error(`[${MODULE_ID}] lingering area:`, err));
     rememberAreas(activity, results);
     recordWallSpell(activity, usageConfig, results).catch(err => console.error(`[${MODULE_ID}] wall spells:`, err));

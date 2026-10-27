@@ -10,6 +10,8 @@ import { applyWeaponMastery } from "./mastery.mjs";
 import { autoRolledEnabled } from "./autoroll.mjs";
 import { applyRetaliation } from "./retaliation.mjs";
 import { rollExtras } from "./boosts.mjs";
+import { applyInvocationsOnHit } from "./invocations.mjs";
+import { offerEmpowered } from "./metamagic.mjs";
 import { LDA, MODULE_ID, LUCK_DICE_ITEM_NAME, IMPACT_DICE_ITEM_NAME, clamp, debug, getDiceUses, actorHasLuckDice, promptChoice, promptSlider, getKeptD20Result, spendDiceFromPools, buildDiceAvailableHTML, isLuckDiceEnabled, combineRolls, HISTORY_FLAG, diceFaces, getAttackAutomation, readCardHistory, updateRollCard, recordCardStep, finishCardHistory, escapeHTML, canUseLuck, pendingLuckDamage, isSkipAttackDialogEnabled, NO_DIALOG } from "./shared.mjs";
 
 // ── Attacks ───────────────────────────────────────────────────────────────────
@@ -53,8 +55,8 @@ export function nativeAttack(message, actor) {
       return bonus;
     },
     finish: () => finishCardHistory(message, attackHitState(message) === true ? "hit" : "miss"),
-    // Bardic Inspiration, Lucky (boosts.mjs): offered with the Luck Dice.
-    extras: rollExtras(actor, "attack"),
+    // Bardic Inspiration, Lucky, Seeking Spell (boosts.mjs): offered with the Luck Dice.
+    extras: rollExtras(actor, "attack", { spell: message.getAssociatedActivity?.()?.item?.type === "spell" || message.system?.item?.type === "spell" }),
     roll: () => current(),
     async applyExtra(out) {
       const before = this.total();
@@ -95,6 +97,7 @@ export async function onAttackRolled(rolls, data) {
     await applyHitEffects(message, activity);
     await automateAttack(message, activity);
     await applyWeaponMastery(message, activity);
+    await applyInvocationsOnHit(message, activity); // Repelling Blast, Grasp of Hadar, Lance of Lethargy
   } catch (err) {
     console.error(`[${MODULE_ID}] native attack error:`, err);
   }
@@ -180,6 +183,8 @@ export async function onDamageRolled(rolls, data) {
     }
     // On-hit riders (any attacker), before the Luck Dice so the prompt follows them.
     if (attackCard) await addOnHitRiders(message, activity, attackCard);
+    // Empowered Spell: reroll some of a spell's damage dice, before any Luck Dice are added.
+    await offerEmpowered(message, activity);
 
     if (actor?.type !== "character" || !isLuckDiceEnabled() || !actorHasLuckDice(actor)) return;
     if (message.getFlag(MODULE_ID, HISTORY_FLAG)?.entries?.some(e => e.kind === "damage")) return;

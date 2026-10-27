@@ -60,6 +60,46 @@ export async function chooseAffected(activity, tokens) {
   return Array.isArray(ids) ? tokens.filter(t => ids.includes(t.id)) : null;
 }
 
+/**
+ * A checklist of creatures to pick from, with which start ticked and how many may be ticked at
+ * most (the rest are disabled once that many are). Resolves with the picked tokens, [] for none,
+ * or null if the window is closed.
+ */
+export async function pickCreatures(title, text, tokens, { max = Infinity, checked = () => false } = {}) {
+  const DialogV2 = foundry.applications.api?.DialogV2;
+  if (!DialogV2 || !tokens.length) return [];
+  let ticked = 0;
+  const rows = tokens.map(t => {
+    const on = ticked < max && !!checked(t);
+    if (on) ticked++;
+    return `<label style="display:flex;align-items:center;gap:6px;margin:2px 0">
+      <input type="checkbox" name="lda-pick" value="${t.id}"${on ? " checked" : ""}> ${escapeHTML(t.name)}
+    </label>`;
+  }).join("");
+  const limit = (root) => {
+    const boxes = [...(root.querySelectorAll?.('input[name="lda-pick"]') ?? [])];
+    const full = boxes.filter(b => b.checked).length >= max;
+    for (const box of boxes) box.disabled = full && !box.checked;
+  };
+  const ids = await DialogV2.wait({
+    window:  { title },
+    content: `<p>${text}</p>${rows}`,
+    buttons: [
+      { action: "ok", label: "Confirm", icon: "fa-solid fa-check", default: true,
+        callback: (_event, button) => [...button.form.querySelectorAll('input[name="lda-pick"]:checked')].map(i => i.value).slice(0, max) },
+      { action: "none", label: "None", icon: "fa-solid fa-xmark", callback: () => [] }
+    ],
+    render: (_event, dialog) => {
+      const root = dialog?.element;
+      if (!root?.addEventListener || !Number.isFinite(max)) return;
+      root.addEventListener("change", () => limit(root));
+      limit(root);
+    },
+    rejectClose: false
+  });
+  return Array.isArray(ids) ? tokens.filter(t => ids.includes(t.id)) : null;
+}
+
 // ── Target confirmation ───────────────────────────────────────────────────────
 // The "targetConfirmation" setting: before the module automates a use, the caster
 // confirms its targets in a small list that follows their canvas targeting live.

@@ -16,9 +16,13 @@
 // through dnd5e's effects tray code (effects.mjs), so nobody has to apply them by hand. Extras that
 // replace the roll (Lucky, Indomitable) are offered only before anything has been added to it.
 
+// Offered the same way under other settings: Protection of the Talisman (+1d4 to a failed save;
+// "invocations") and Seeking Spell (reroll a missed spell attack's d20; "metamagic").
+
 import { requestApplyEffects } from "./effects.mjs";
 import { sourceItem, sourceActor, rulesOf } from "./advantage.mjs";
-import { MODULE_ID, debug, isRollBoostsEnabled, combineRolls, getKeptD20Result, socket, getPrimaryGM } from "./shared.mjs";
+import { sorceryPoints, spendSorceryPoints, metamagicCost } from "./metamagic.mjs";
+import { MODULE_ID, debug, isRollBoostsEnabled, isInvocationsEnabled, isMetamagicEnabled, combineRolls, getKeptD20Result, socket, getPrimaryGM } from "./shared.mjs";
 
 export const BOOST_FLAG = "boost";
 const BARDIC = "bardic-inspiration";
@@ -35,7 +39,9 @@ export function usesLeft(item) {
   if (!Number.isFinite(max) || max <= 0) return 0;
   return Math.max(0, max - (Number(uses.spent) || 0));
 }
-const spendUse = (item) => item.update({ "system.uses.spent": (Number(item.system.uses.spent) || 0) + 1 });
+/** Spend uses of an item (Luck Points, Sorcery Points, an invocation's uses). */
+export const spendUses = (item, count = 1) => item.update({ "system.uses.spent": (Number(item.system.uses.spent) || 0) + count });
+const spendUse = (item) => spendUses(item, 1);
 const itemWithUses = (actor, identifier) =>
   [...(actor?.items ?? [])].find(i => i.system?.identifier === identifier && usesLeft(i) > 0) ?? null;
 
@@ -126,9 +132,13 @@ async function endSpell(mark) {
   if (mark.parent?.effects?.get?.(mark.id)) await removeEffects([mark]);
 }
 
-/** What this creature could use on this roll (kind: "attack", "check" or "save"), as prompt extras. */
-export function boostsFor(actor, kind) {
-  const boosts = [];
+/**
+ * What this creature could use on this roll (kind: "attack", "check" or "save"; `spell`: a spell's
+ * attack), as prompt extras — each under its own setting.
+ */
+export function boostsFor(actor, kind, { spell: spellAttack = false } = {}) {
+  const boosts = [...invocationAndMetamagicBoosts(actor, kind, { spell: spellAttack })];
+  if (!isRollBoostsEnabled()) return boosts;
   const bardic = bardicInspiration(actor);
   if (bardic) boosts.push({
     id: "bardic", label: `Bardic Inspiration (+1${bardic.die})`,
@@ -174,14 +184,41 @@ export function boostsFor(actor, kind) {
   return boosts;
 }
 
+/** Protection of the Talisman (failed saves) and Seeking Spell (missed spell attacks). */
+function invocationAndMetamagicBoosts(actor, kind, { spell }) {
+  const boosts = [];
+  const talisman = kind === "save" && isInvocationsEnabled()
+    ? [...(actor?.items ?? [])].find(i => i.system?.identifier === "protection-of-the-talisman") : null;
+  if (talisman && (!talisman.system?.uses?.max || usesLeft(talisman) > 0)) boosts.push({
+    id: "talisman", label: "Protection of the Talisman (+1d4)",
+    async use() {
+      const bonusRoll = await rollOne("1d4");
+      if (talisman.system?.uses?.max) await spendUse(talisman);
+      return { bonusRoll, label: "Added 1d4 Protection of the Talisman", detail: `+${bonusRoll.total}` };
+    }
+  });
+  const seeking = kind === "attack" && spell && isMetamagicEnabled()
+    ? [...(actor?.items ?? [])].find(i => i.system?.identifier === "seeking-spell") : null;
+  const cost = seeking ? metamagicCost("seeking", seeking) : 0;
+  if (seeking && sorceryPoints(actor) >= cost) boosts.push({
+    id: "seeking", replaces: true, label: `Seeking Spell: reroll (${cost} Sorcery Point${cost === 1 ? "" : "s"})`,
+    async use(roll) {
+      const again = await rerollWithBonus(roll, 0);
+      await spendSorceryPoints(actor, cost);
+      return { roll: again, label: "Rerolled with Seeking Spell", detail: `d20: ${getKeptD20Result(again) ?? "?"}` };
+    }
+  });
+  return boosts;
+}
+
 /**
  * The extras for the shared prompts (see promptLuckOnCheckFail) — each usable once per roll —
- * or null when the setting is off or the creature has none.
+ * or null when the creature has none (each kind is under its own setting).
  */
-export function rollExtras(actor, kind) {
-  if (!isRollBoostsEnabled() || !actor) return null;
+export function rollExtras(actor, kind, context = {}) {
+  if (!actor) return null;
   const used = new Set();
-  const list = () => boostsFor(actor, kind).filter(b => !used.has(b.id));
+  const list = () => boostsFor(actor, kind, context).filter(b => !used.has(b.id));
   if (!list().length) return null;
   return {
     // Replacing the roll would undo what was added; adding can't fix a natural 1 on an attack.

@@ -6,6 +6,8 @@ import { REACTIONS_FLAG } from "./reactions.mjs";
 import { ATTACK_REASONS_FLAG, reasonsHTML } from "./advantage.mjs";
 import { MASTERY_RESULT_FLAG } from "./mastery.mjs";
 import { SAVE_REASONS_FLAG, saveReasonsHTML } from "./save-rules.mjs";
+import { INVOCATION_RESULT_FLAG } from "./invocations.mjs";
+import { METAMAGIC_FLAG } from "./metamagic.mjs";
 import { MODULE_ID, HISTORY_FLAG, renderLuckSection, APPLIED_FLAG, escapeHTML, APPLIED_EFFECTS_FLAG } from "./shared.mjs";
 import { undoAppliedDamage, undoAppliedEffects } from "./undo.mjs";
 
@@ -56,7 +58,7 @@ export const UNDO_NOTE = "Doesn't reverse dnd5e's own follow-ups: a concentratio
  */
 export function injectNativeHistory(message, html) {
   if (!(html instanceof HTMLElement) || html.querySelector(".midi-results")) return;
-  html.querySelectorAll(".lda-luck-history, .lda-attack-reasons-row, .lda-save-reasons-row, .lda-save-summary-note, .lda-mastery, .lda-riders, .lda-reactions, .lda-applied-damage, .lda-applied-effects").forEach(el => el.remove());
+  html.querySelectorAll(".lda-luck-history, .lda-attack-reasons-row, .lda-save-reasons-row, .lda-save-summary-note, .lda-mastery, .lda-note-row, .lda-riders, .lda-reactions, .lda-applied-damage, .lda-applied-effects").forEach(el => el.remove());
   if (!message.isContentVisible) return;
   injectSummaryNotes(html);
 
@@ -71,6 +73,13 @@ export function injectNativeHistory(message, html) {
   if (saveReasons && saveReasonsHTML(saveReasons)) blocks.push(renderSaveReasonsSection(saveReasons));
   const mastery = message.getFlag?.(MODULE_ID, MASTERY_RESULT_FLAG);
   if (mastery?.text) blocks.push(renderMasterySection(mastery));
+  const metamagic = message.getFlag?.(MODULE_ID, METAMAGIC_FLAG);
+  if (metamagic?.name) {
+    const cost = `${metamagic.cost} Sorcery Point${metamagic.cost === 1 ? "" : "s"}`;
+    blocks.push(renderNoteRow("fa-wand-sparkles", `Metamagic (${metamagic.name})`, [cost, ...(metamagic.notes ?? [])].join(" — ")));
+  }
+  const invocations = message.getFlag?.(MODULE_ID, INVOCATION_RESULT_FLAG);
+  if (invocations) blocks.push(renderNoteRow("fa-eye", "Invocations", invocations));
   const reactions = message.getFlag?.(MODULE_ID, REACTIONS_FLAG);
   if (reactions?.length) blocks.push(renderReactionsSection(reactions));
   const riders = message.getFlag?.(MODULE_ID, RIDERS_FLAG);
@@ -140,10 +149,22 @@ export function renderAppliedEffectsSection(applied) {
   return wrapper.firstElementChild;
 }
 
+/** "Metamagic (Careful Spell)  1 Sorcery Point — protected Pip" and the like, as a card row. */
+export function renderNoteRow(icon, heading, text) {
+  const wrapper = document.createElement("div");
+  wrapper.innerHTML = `
+    <section class="icon-row lda-note-row" style="display:flex;align-items:flex-start;gap:6px;margin:2px 0">
+      <i class="fa-fw fa-solid ${icon}" aria-hidden="true" style="margin-top:2px;opacity:0.8"></i>
+      <div style="flex:1;min-width:0"><strong>${escapeHTML(heading)}</strong> ${escapeHTML(text)}</div>
+    </section>`.trim();
+  return wrapper.firstElementChild;
+}
+
 /** "On hit  Sneak Attack 3d6 (11) · Hunter's Mark 1d6 (4)" as a card row. */
 export function renderRidersSection(riders) {
   const parts = riders.map(r =>
-    `<span style="white-space:nowrap" data-tooltip="${escapeHTML(r.formula)}">${escapeHTML(r.name)} <strong>${r.total}</strong></span>`);
+    `<span style="white-space:nowrap" data-tooltip="${escapeHTML(r.formula)}">${escapeHTML(r.name)} <strong>${r.total}</strong>${
+      r.note ? ` <span style="opacity:0.7">(${escapeHTML(r.note)})</span>` : ""}</span>`);
   const wrapper = document.createElement("div");
   wrapper.innerHTML = `
     <section class="icon-row lda-riders" style="display:flex;align-items:flex-start;gap:6px;margin:2px 0">

@@ -57,9 +57,9 @@ export async function applyCardDamage({ messageId, targets, outcomeKey }) {
     if (!actor?.applyDamage) continue;
     const multiplier = Number.isFinite(target.multiplier) ? target.multiplier : 1;
     // Reactions to the incoming damage (Absorb Elements, Parry) — for a single instance of damage.
-    let cardDamages = damages, notes = [];
+    let cardDamages = damages, notes = [], afterApply = null;
     if (!Number.isFinite(target.hits) && getReactionPrompts() !== "off") {
-      ({ damages: cardDamages, notes } = await damageReactions(message, target, damages));
+      ({ damages: cardDamages, notes, afterApply = null } = await damageReactions(message, target, damages));
     }
     // What changed the damage before it got here (Evasion), shown with the reactions.
     if (Array.isArray(target.notes)) notes = [...target.notes.map(String), ...notes];
@@ -75,6 +75,8 @@ export async function applyCardDamage({ messageId, targets, outcomeKey }) {
     }
     const after  = sourceHP(actor);
     const hits   = instances.length;
+    // A reaction's effect that follows the damage (Tomb of Levistus's ice).
+    if (afterApply) await afterApply().catch(err => console.error(`[${MODULE_ID}] after-damage reaction:`, err));
     applied.push({
       token: target.token, actor: actor.uuid, name: target.name ?? actor.name, amount, saved: !!target.saved,
       ...(hits > 1 ? { hits } : {}), ...(target.luck && baseDamages !== damages ? { luck: true } : {}),

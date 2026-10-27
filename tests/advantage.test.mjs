@@ -339,3 +339,18 @@ test("2024 Crossbow Expert: an off-hand hand crossbow adds its ability modifier 
   assert.deepEqual(roll([item("crossbow-expert", { rules: "2024" })], "oneHanded"), ["1d6"]);
   assert.deepEqual(roll([item("crossbow-expert", { rules: "2024" })], "offhand", ["1d6", "@mod"]), ["1d6", "@mod"]);
 });
+
+test("Spell Sniper through a spell conduit (the range already multiplied): 2014 doubles it, 2024 adds 60 ft times the multiplier", () => {
+  const conduitBolt = { type: "spell", name: "Fire Bolt", flags: { "scorpious187s-custom-items": { conduitCast: { rangeMultiplier: 2 } } },
+    system: { level: 0, range: { value: 240, units: "ft" } } };
+  const reach = (rules, col) => {
+    env.reset(); settings.attackAdvantage = true;
+    const me = creature("Me", 0, 0, { disposition: 1, items: [item("spell-sniper", { rules })] });
+    target(creature("Far", col, 0));
+    return attackReasons(attack(me, { item: conduitBolt, classification: "spell" })).cancel;
+  };
+  assert.equal(reach("2024", 72), null);                 // 360 ft: (120 + 60) × 2
+  assert.match(reach("2024", 73), /365 of 360/);
+  assert.equal(reach("2014", 96), null);                 // 480 ft: 120 × 2 × 2
+  assert.match(reach("2014", 97), /485 of 480/);
+});

@@ -2,6 +2,7 @@
 // Effect automation: applying an activity's effects to the targets it hit or that failed their save.
 
 import { isPrivateGMCard, playerTargets, recordOutcome, outcomeTitle } from "./outcome.mjs";
+import { doubledDuration, METAMAGIC_FLAG } from "./metamagic.mjs";
 import { MODULE_ID, getPrivateRollOutcome, isEffectAutomationEnabled, socket, getPrimaryGM, resolveTarget, APPLIED_EFFECTS_FLAG } from "./shared.mjs";
 
 // ── Effect automation ─────────────────────────────────────────────────────────
@@ -53,6 +54,8 @@ export async function applyActivityEffects({ usageId, targets }) {
   }
   tray.chatMessage = usage;
   const effects = await usage.system.getEffects();
+  // Extended Spell (metamagic.mjs): the spell's effects last twice as long.
+  const extended = usage.getFlag?.(MODULE_ID, METAMAGIC_FLAG)?.name === "Extended Spell";
 
   const applied = [];
   for (const target of targets ?? []) {
@@ -75,6 +78,8 @@ export async function applyActivityEffects({ usageId, targets }) {
           e._stats?.duplicateSource === effect.uuid || e._stats?.compendiumSource === effect.uuid);
         const wasDisabled = !!existing?.disabled;
         const result = await tray._applyEffectToActor(effect, actor);
+        const longer = extended ? doubledDuration(result?.duration) : null;
+        if (longer) await result.update?.({ duration: longer });
         names.push(effect.name);
         if (!existing && result?.uuid) undo.push({ effect: result.uuid, action: "create" });
         else if (existing && wasDisabled) undo.push({ effect: existing.uuid, action: "enable" });

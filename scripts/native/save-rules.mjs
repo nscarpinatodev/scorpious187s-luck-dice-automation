@@ -163,6 +163,10 @@ export function onPreRollSave(config, dialog, message) {
   let reasons;
   try { reasons = saveReasons(actor, config.ability, saveSource(message), { tokenDoc: saverToken(actor, message) }); }
   catch (err) { console.error(`[${MODULE_ID}] save rules:`, err); return; }
+  // Reasons an earlier hook noted on this roll (2024 Extended Spell's, on a concentration save) stay with these.
+  const prior = foundry.utils.getProperty(message ?? {}, `data.flags.${MODULE_ID}.${SAVE_REASONS_FLAG}`);
+  if (prior?.advantage?.length) reasons.advantage = [...prior.advantage, ...reasons.advantage];
+  if (prior?.disadvantage?.length) reasons.disadvantage = [...prior.disadvantage, ...reasons.disadvantage];
   const { advantage, disadvantage, autoFail, bonuses } = reasons;
   if (!advantage.length && !disadvantage.length && !autoFail && !bonuses.length) return;
 

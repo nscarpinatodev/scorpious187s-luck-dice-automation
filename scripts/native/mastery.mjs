@@ -49,7 +49,7 @@ function damageType(activity) {
 }
 
 /** The effect data for a mastery effect, timed by dnd5e's "source" turn expiries. */
-function masteryEffect(kind, attackerActor, target, { name, img, changes = [], expiry }) {
+export function masteryEffect(kind, attackerActor, target, { name, img, changes = [], expiry }) {
   return {
     name, img, type: "base", origin: attackerActor.uuid, transfer: false, disabled: false,
     duration: { expiry },
@@ -69,8 +69,9 @@ function hasMastery(actor, kind, attackerUuid) {
 /**
  * Make a mastery's change to a creature: an effect, the Prone status, or a push.
  * Runs where the creature can be changed; otherwise asks the primary GM.
+ * Also used by the invocations (invocations.mjs): pushes, pulls, Lance of Lethargy.
  */
-async function applyMasteryChange(change) {
+export async function applyMasteryChange(change) {
   const tokenDoc = change.token ? await fromUuid(change.token) : null;
   const actor = tokenDoc?.actor ?? (change.actor ? await fromUuid(change.actor) : null);
   if (!actor) return;
@@ -89,7 +90,7 @@ export async function applyMasteryGM(change) {
     if (tokenDoc && Number.isFinite(change.x) && Number.isFinite(change.y)) await tokenDoc.update({ x: change.x, y: change.y }, { [MODULE_ID]: { forced: true } });
     return;
   }
-  if (["sap", "slow", "vex"].includes(change.kind) && change.effect?.flags?.[MODULE_ID]?.[MASTERY_FLAG]?.kind === change.kind) {
+  if (["sap", "slow", "vex", "lethargy"].includes(change.kind) && change.effect?.flags?.[MODULE_ID]?.[MASTERY_FLAG]?.kind === change.kind) {
     await actor.createEmbeddedDocuments("ActiveEffect", [change.effect]);
   }
 }
@@ -192,8 +193,36 @@ export function pushDestination(attackerDoc, targetDoc, feet = 10) {
   return null;
 }
 
+/**
+ * Where a pull of up to `feet` straight toward the puller lands: it stops short of walls, and next to
+ * the puller rather than in its space. Null when there's no room.
+ */
+export function pullDestination(pullerDoc, targetDoc, feet = 10) {
+  const grid = canvas?.grid;
+  if (!grid || !pullerDoc || !targetDoc) return null;
+  const center = (t) => t.object?.center ?? { x: t.x + (t.width * grid.size) / 2, y: t.y + (t.height * grid.size) / 2 };
+  const at = center(targetDoc), to = center(pullerDoc);
+  const dx = to.x - at.x, dy = to.y - at.y, length = Math.hypot(dx, dy);
+  const room = length - ((pullerDoc.width + targetDoc.width) / 2) * grid.size;
+  if (!length || room <= 0) return null;
+  const backend = CONFIG.Canvas?.polygonBackends?.move;
+  for (let step = feet; step > 0; step -= grid.distance) {
+    const pixels = Math.min((step / grid.distance) * grid.size, room);
+    const dest = { x: at.x + (dx / length) * pixels, y: at.y + (dy / length) * pixels };
+    let blocked = false;
+    try { blocked = !!backend?.testCollision?.(at, dest, { type: "move", mode: "any" }); } catch { blocked = false; }
+    if (blocked) continue;
+    const topLeft = { x: dest.x - (targetDoc.width * grid.size) / 2, y: dest.y - (targetDoc.height * grid.size) / 2 };
+    const snapped = grid.getSnappedPoint?.(topLeft, { mode: globalThis.CONST?.GRID_SNAPPING_MODES?.TOP_LEFT_CORNER ?? 16 }) ?? topLeft;
+    const moved = Math.round((pixels / grid.size) * grid.distance);
+    if (moved <= 0) return null;
+    return { x: Math.round(snapped.x), y: Math.round(snapped.y), feet: moved };
+  }
+  return null;
+}
+
 /** The attacker's token: dnd5e's usage token, else the attack card's speaker, else the actor's first token. */
-function attackerToken(activity, message) {
+export function attackerToken(activity, message) {
   const usage = activity.getUsageToken?.() ?? null;
   const fromUsage = usage?.document ?? usage;
   if (fromUsage) return fromUsage;

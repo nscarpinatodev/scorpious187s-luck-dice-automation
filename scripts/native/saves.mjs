@@ -5,6 +5,7 @@ import { requestApplyDamage } from "./apply.mjs";
 import { applySaveEffects } from "./effects.mjs";
 import { clearAreasForUse } from "./areas.mjs";
 import { evasionApplies } from "./save-rules.mjs";
+import { chooseSaveMetamagic } from "./metamagic.mjs";
 import { MODULE_ID, debug, promptChoice, getSaveAutomation, escapeHTML, pendingLuckDamage, socket, pendingLuckChecks, pendingSaveRequests, getPrimaryGM, activePlayerOwner, abilityLabel, resolveTarget, NO_DIALOG } from "./shared.mjs";
 import { tokensInActivityArea, chooseAffected, regionsOf, needsConfirmation, confirmTargets } from "./targeting.mjs";
 
@@ -46,6 +47,8 @@ export async function rollAutomatedSave(target, { activityUuid, activityName, us
   const activity = activityUuid ? await fromUuid(activityUuid) : null;
 
   const rollData = { ability, target: dc, ...(fastForward ? NO_DIALOG : {}) };
+  // Heightened Spell (metamagic.mjs): this creature saves with disadvantage.
+  if (target.heightened) rollData.disadvantage = true;
   if (activity?.save?.bonus) {
     const bonus     = CONFIG.Dice.BasicRoll.replaceFormulaData(activity.save.bonus, activity.getRollData(), { missing: 0 });
     const bonusData = CONFIG.Dice.BasicRoll.constructParts({ activityBonus: bonus });
@@ -53,7 +56,7 @@ export async function rollAutomatedSave(target, { activityUuid, activityName, us
   }
   const speaker = ChatMessage.getSpeaker({ actor, scene: tokenDoc?.parent ?? canvas.scene, token: tokenDoc });
   // Name what the save is for: "Fireball — Dexterity Saving Throw", "Weapon Mastery: Topple (Maul) — …".
-  const flavor = activityName ? `${activityName} — ${abilityLabel(ability)} Saving Throw` : undefined;
+  const flavor = activityName ? `${activityName} — ${abilityLabel(ability)} Saving Throw${target.heightened ? " (Heightened Spell)" : ""}` : undefined;
   const rolls = await actor.rollSavingThrow(rollData, fastForward ? { configure: false } : {}, {
     data: { speaker, ...(flavor ? { flavor } : {}), system: { ...(activity?.messageSources ?? {}), ...(link ? { origin: usageId } : {}) } }
   });
@@ -201,6 +204,14 @@ export async function automateSaves(activity, targets, usage, mode = getSaveAuto
   const { ability, dc } = saveOf(activity) ?? {};
   if (!ability || mode === "off" || !targets.length) return;
 
+  // Metamagic (metamagic.mjs): Careful Spell's creatures succeed without rolling; Heightened Spell's saves with disadvantage.
+  const { careful, heightened, state: metamagic } = await chooseSaveMetamagic(activity, targets, usage);
+  const protectedTargets = targets.filter(t => careful.has(t.token));
+  const protectedOutcomes = protectedTargets
+    .map(t => ({ token: t.token, result: { passed: true, total: null, careful: true, carefulRules: metamagic?.rules } }));
+  const everyone = targets;
+  targets = targets.filter(t => !careful.has(t.token)).map(t => t.token === heightened ? { ...t, heightened: true } : t);
+
   // Group targets by who rolls them: an active player owner, else the GM (null).
   const groups = new Map();
   for (const target of targets) {
@@ -234,9 +245,9 @@ export async function automateSaves(activity, targets, usage, mode = getSaveAuto
     requests.forEach(r => r.catch(err => console.error(`[${MODULE_ID}] save automation:`, err)));
     return;
   }
-  const outcome = new Map((await Promise.all(requests)).flat().map(r => [r.token, r.result]));
-  await applySaveDamage(activity, targets, outcome, usage);
-  if (usage) await applySaveEffects(activity, usage, targets, outcome);
+  const outcome = new Map([...(await Promise.all(requests)).flat(), ...protectedOutcomes].map(r => [r.token, r.result]));
+  await applySaveDamage(activity, everyone, outcome, usage);
+  if (usage) await applySaveEffects(activity, usage, everyone, outcome);
   if (usage) await clearAreasForUse(usage.id);
 }
 
@@ -266,7 +277,13 @@ export async function applySaveDamage(activity, targets, outcome, usage = null) 
   const ability = saveOf(activity)?.ability;
   const list = [];
   for (const t of rolled) {
-    const saved = !!outcome.get(t.token).passed;
+    const result = outcome.get(t.token);
+    const saved = !!result.passed;
+    // Careful Spell (2024): no damage where a success means half.
+    if (result.careful && result.carefulRules !== "2014" && onSave === "half") {
+      list.push({ ...t, saved, multiplier: 0, notes: ["Careful Spell"] });
+      continue;
+    }
     // Evasion (the "saveRules" setting): none on a success, half on a failure.
     if (evasionApplies((await resolveTarget(t)).actor, ability, onSave)) {
       list.push({ ...t, saved, multiplier: saved ? 0 : 0.5, notes: ["Evasion"] });

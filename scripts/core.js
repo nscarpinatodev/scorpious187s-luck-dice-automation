@@ -483,6 +483,14 @@ function isRollBoostsEnabled() {
   try { return game.settings.get(MODULE_ID, "rollBoosts"); } catch { return false; }
 }
 
+function isInvocationsEnabled() {
+  try { return game.settings.get(MODULE_ID, "invocations"); } catch { return false; }
+}
+
+function isMetamagicEnabled() {
+  try { return game.settings.get(MODULE_ID, "metamagic"); } catch { return false; }
+}
+
 function isInspirationEnabled() {
   try { return game.settings.get(MODULE_ID, "enableInspiration"); } catch { return false; }
 }
@@ -727,6 +735,32 @@ Hooks.once("init", () => {
           "and 2014 Resistance on saves (used up, ending the spell), the Lucky feat (roll another d20 and use the higher — " +
           "and when an attack hits you, the attacker rolls another and uses the lower) and Indomitable (reroll a failed save; " +
           "2024 adds your Fighter level). 2024 Guidance adds its d4 through dnd5e already.",
+    scope: "world",
+    config: true,
+    type: Boolean,
+    default: false
+  });
+
+  game.settings.register(MODULE_ID, "invocations", {
+    name: "Eldritch Invocations",
+    hint: "Eldritch Blast: Agonizing Blast (+Charisma modifier to each beam), Eldritch Spear (range), Repelling Blast (push " +
+          "10 ft), Grasp of Hadar (pull 10 ft) and Lance of Lethargy (−10 ft speed). Pact weapon hits: Eldritch Smite and " +
+          "Lifedrinker (offered like Divine Smite), Improved Pact Weapon (+1). Protection of the Talisman (+1d4 to a failed " +
+          "save), Rebuke and Tomb of Levistus (reactions, with Reaction Prompts on), Gift of the Protectors (1 HP instead of 0, " +
+          "asked of the warlock), Cloak of Flies (poison at the start of a nearby creature's turn) and Maddening Hex. Spends " +
+          "the invocation's uses where it has them.",
+    scope: "world",
+    config: true,
+    type: Boolean,
+    default: false
+  });
+
+  game.settings.register(MODULE_ID, "metamagic", {
+    name: "Metamagic",
+    hint: "A sorcerer with Sorcery Points left picks Metamagic in the spell casting window (it opens for every spell they " +
+          "cast, cantrips too): Careful, Distant, Extended, Heightened, Quickened, Subtle, Transmuted or Twinned — the points " +
+          "come off Font of Magic. Empowered Spell is offered when the spell's damage is rolled (pick the dice to reroll), and " +
+          "Seeking Spell on a missed spell attack.",
     scope: "world",
     config: true,
     type: Boolean,
@@ -1030,6 +1064,7 @@ const SETTINGS_LAYOUT = [
   { title: "Reactions & Roll Bonuses", keys: ["reactionPrompts", "rollBoosts", "opportunityAttacks"] },
   { title: "Targets, Areas & Walls", keys: ["targetConfirmation", "lingeringAreas", "clearInstantAreas", "wallSpells"] },
   { title: "Chat & Turns", keys: ["privateRollOutcome", "turnSummary"] },
+  { title: "Class Features", keys: ["invocations", "metamagic"] },
   { title: "Other", major: true, keys: ["debug"] }
 ];
 
@@ -1112,7 +1147,7 @@ return {
   whisperLuckRegain, maybeRegainLuckDie,
   isLuckDiceEnabled, isInspirationEnabled, getAttackAutomation, getSaveAutomation, getPrivateRollOutcome,
   isEffectAutomationEnabled, isHealingAutomationEnabled,
-  isDamageOnlyAutomationEnabled, isConcentrationBreakEnabled, isConcentrationAutoRollEnabled, isOnHitRidersEnabled, isLingeringAreasEnabled, isRepeatSavesEnabled, getReactionPrompts, isSkipAttackDialogEnabled, isAttackAdvantageEnabled, getLegendaryResistance, isWeaponMasteryEnabled, isAutoCritsEnabled, isOpportunityAttacksEnabled, isRetaliationEnabled, isDeathSavesEnabled, isClearInstantAreasEnabled, isTurnSummaryEnabled, isWallSpellsEnabled, isRayAutomationEnabled, getTargetConfirmation, isSaveRulesEnabled, isRollBoostsEnabled,
+  isDamageOnlyAutomationEnabled, isConcentrationBreakEnabled, isConcentrationAutoRollEnabled, isOnHitRidersEnabled, isLingeringAreasEnabled, isRepeatSavesEnabled, getReactionPrompts, isSkipAttackDialogEnabled, isAttackAdvantageEnabled, getLegendaryResistance, isWeaponMasteryEnabled, isAutoCritsEnabled, isOpportunityAttacksEnabled, isRetaliationEnabled, isDeathSavesEnabled, isClearInstantAreasEnabled, isTurnSummaryEnabled, isWallSpellsEnabled, isRayAutomationEnabled, getTargetConfirmation, isSaveRulesEnabled, isRollBoostsEnabled, isInvocationsEnabled, isMetamagicEnabled,
   actorHasInspiration, consumeInspiration, evaluateInspirationReroll,
   HISTORY_FLAG, diceFaces, renderLuckSection, requestRollActors,
   readCardHistory, updateRollCard, recordCardStep, finishCardHistory, cardReporter,

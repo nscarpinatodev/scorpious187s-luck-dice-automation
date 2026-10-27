@@ -14,9 +14,15 @@
 // A rider that spends something (Divine Smite's spell slot, limited uses) is used
 // through dnd5e first, with its own dialog; dnd5e's follow-up roll for that use
 // is suppressed (see claimRiderUse) so its dice land on the hit instead.
+// Under the "invocations" setting instead (invocations.mjs): Eldritch Smite (a Pact
+// Magic slot; then Prone, if the target is Huge or smaller) and Lifedrinker (2014:
+// the Charisma modifier as necrotic damage, on every pact weapon hit; 2024: 1d6 of a
+// chosen type once per turn, then a Hit Die spent to heal, if wanted).
 
-import { MODULE_ID, debug, escapeHTML, isOnHitRidersEnabled, NO_DIALOG } from "./shared.mjs";
-import { tokenDistance } from "./advantage.mjs";
+import { MODULE_ID, debug, escapeHTML, isOnHitRidersEnabled, isInvocationsEnabled, promptChoice, NO_DIALOG } from "./shared.mjs";
+import { tokenDistance, rulesOf } from "./advantage.mjs";
+import { isPactWeapon } from "./invocations.mjs";
+import { applyMasteryChange } from "./mastery.mjs";
 
 export const RIDERS_FLAG = "riders";
 
@@ -52,8 +58,63 @@ export const RIDERS = {
       if (named) return [unholy ? named : all.find(a => a !== named) ?? named];
       return unholy ? all.slice(0, 2) : all.slice(0, 1);
     }
+  },
+  "eldritch-smite": {
+    mode: "choose", checked: false, oncePerTurn: true, setting: isInvocationsEnabled,
+    eligible: ({ activity }) => isPactWeapon(activity),
+    activities: (item) => damageActivities(item).slice(0, 1),
+    after: smiteProne
+  },
+  "lifedrinker": {
+    // 2014: added to every pact weapon hit. 2024: offered once per turn, its type chosen, then a Hit Die to heal.
+    mode: (item) => rulesOf(item) === "2014" ? "auto" : "choose",
+    checked: true, oncePerTurn: (item) => rulesOf(item) !== "2014", setting: isInvocationsEnabled,
+    eligible: ({ activity }) => isPactWeapon(activity),
+    activities: () => [],
+    roll: lifedrinkerDamage,
+    after: lifedrinkerHeal
   }
 };
+
+/** Eldritch Smite: offer to knock each Huge or smaller creature hit Prone. */
+async function smiteProne(choice, { hits }) {
+  const done = [];
+  for (const hit of hits) {
+    const targetDoc = hit.token ? await fromUuid(hit.token) : null;
+    const size = targetDoc?.actor?.system?.traits?.size ?? "med";
+    if (!targetDoc?.actor || size === "grg" || targetDoc.actor.statuses?.has?.("prone")) continue;
+    const answer = await promptChoice("Eldritch Smite", `<p>Knock <strong>${escapeHTML(hit.name)}</strong> Prone?</p>`,
+      [{ action: "prone", label: "Knock Prone" }, { action: "no", label: "No" }]);
+    if (answer !== "prone") continue;
+    await applyMasteryChange({ kind: "prone", token: hit.token, actor: hit.actor });
+    done.push(`${hit.name} knocked Prone`);
+  }
+  return done;
+}
+
+/** Lifedrinker's damage: the Charisma modifier as necrotic (2014), or 1d6 of the chosen type (2024). */
+async function lifedrinkerDamage(choice, { activity, isCritical }) {
+  const actor = activity.actor;
+  if (rulesOf(choice.item) === "2014") {
+    const amount = Math.max(1, Number(actor.system?.abilities?.cha?.mod ?? 0) || 0);
+    return [await new CONFIG.Dice.DamageRoll(String(amount), {}, { type: "necrotic", types: ["necrotic"] }).evaluate()];
+  }
+  const type = await promptChoice("Lifedrinker", "<p>Which damage type?</p>",
+    [{ action: "necrotic", label: "Necrotic" }, { action: "psychic", label: "Psychic" }, { action: "radiant", label: "Radiant" }]);
+  if (!["necrotic", "psychic", "radiant"].includes(type)) return [];
+  return [await new CONFIG.Dice.DamageRoll("1d6", actor.getRollData?.() ?? {}, { type, types: [type], isCritical }).evaluate()];
+}
+
+/** Lifedrinker 2024: offer to spend a Hit Die to heal — its heal activity, used through dnd5e. */
+async function lifedrinkerHeal(choice) {
+  if (rulesOf(choice.item) === "2014") return [];
+  const heal = [...(choice.item.system?.activities?.values?.() ?? [])].find(a => a.type === "heal");
+  if (!heal) return [];
+  const answer = await promptChoice("Lifedrinker", "<p>Spend a Hit Point Die to regain hit points?</p>",
+    [{ action: "heal", label: "Spend a Hit Die" }, { action: "no", label: "No" }]);
+  if (answer !== "heal") return [];
+  return (await heal.use({}, {}, {})) ? ["Hit Die spent to heal"] : [];
+}
 
 const INCAPACITATING = ["incapacitated", "paralyzed", "petrified", "stunned", "unconscious", "dead"];
 
@@ -97,15 +158,17 @@ export async function eligibleRiders(activity, card) {
   for (const item of actor.items ?? []) {
     const identifier = item.system?.identifier;
     const rider = RIDERS[identifier];
-    if (!rider || item === activity.item) continue;
-    if (rider.mode === "mark") {
+    if (!rider || item === activity.item || !(rider.setting ?? isOnHitRidersEnabled)()) continue;
+    const mode = typeof rider.mode === "function" ? rider.mode(item) : rider.mode;
+    const oncePerTurn = typeof rider.oncePerTurn === "function" ? rider.oncePerTurn(item) : !!rider.oncePerTurn;
+    if (mode === "mark") {
       if (!targets.length || !targets.every(t => t.effects?.some?.(e => cameFrom(e, item)))) continue;
     } else {
       if (rider.eligible && !rider.eligible({ activity, card, targets, tokens })) continue;
-      if (rider.oncePerTurn && turn && usedThisTurn.get(`${actor.uuid}:${identifier}`) === turn) continue;
+      if (oncePerTurn && turn && usedThisTurn.get(`${actor.uuid}:${identifier}`) === turn) continue;
     }
     const activities = rider.activities(item, { targets });
-    if (activities.length) out.push({ item, rider, identifier, activities });
+    if (activities.length || rider.roll) out.push({ item, rider, identifier, activities, mode, oncePerTurn });
   }
   return out;
 }
@@ -138,8 +201,8 @@ async function chooseRiders(card, choices, marks) {
  * activity takes one), or item uses / resources. A mark's bonus damage never
  * does — the mark was paid for when it was cast (some legacy data says otherwise).
  */
-export function spendsSomething({ item, rider, activities }) {
-  if (rider?.mode === "mark") return false;
+export function spendsSomething({ item, rider, activities, mode }) {
+  if ((mode ?? rider?.mode) === "mark" || rider?.roll) return false;
   const activity = activities[0];
   if (item.type === "spell") return (item.system?.level ?? 0) > 0 && activity?.consumption?.spellSlot !== false;
   return (activity?.consumption?.targets?.length ?? 0) > 0;
@@ -182,16 +245,25 @@ async function riderActivity(choice, activity) {
  * setting is off, there are none, or they were already added to this card.
  */
 export async function addOnHitRiders(message, activity, card) {
-  if (!isOnHitRidersEnabled() || !message || !card || message.getFlag?.(MODULE_ID, RIDERS_FLAG)) return;
+  if ((!isOnHitRidersEnabled() && !isInvocationsEnabled()) || !message || !card || message.getFlag?.(MODULE_ID, RIDERS_FLAG)) return;
   const riders = await eligibleRiders(activity, card);
   if (!riders.length) return;
-  const marks   = riders.filter(r => r.rider.mode === "mark");
-  const chosen  = [...marks, ...await chooseRiders(card, riders.filter(r => r.rider.mode !== "mark"), marks)];
+  const automatic = riders.filter(r => r.mode === "mark" || r.mode === "auto");
+  const chosen  = [...automatic, ...await chooseRiders(card, riders.filter(r => r.mode === "choose"), automatic)];
   if (!chosen.length) return;
 
   const isCritical = !!card.rolls?.[0]?.isCritical;
-  const added = [], rolls = [];
+  const hits = (card.system?.evaluatedTargets ?? []).filter(t => !t.isMiss);
+  const added = [], rolls = [], afterwards = [];
   for (const choice of chosen) {
+    const before = rolls.length;
+    if (choice.rider.roll) {
+      // A rider that rolls its own damage (Lifedrinker).
+      const riderRolls = (await choice.rider.roll(choice, { activity, card, isCritical })) ?? [];
+      if (game.dice3d) for (const r of riderRolls) await game.dice3d.showForRoll(r, game.user, true, null, false);
+      rolls.push(...riderRolls);
+      if (riderRolls.length) added.push({ name: choice.item.name, formula: riderRolls.map(r => r.formula).join(" + "), total: riderRolls.reduce((s, r) => s + r.total, 0) });
+    }
     for (const [index, base] of choice.activities.entries()) {
       // Only the first activity is used (spends the resource); the rest just roll.
       const act = index === 0 ? await riderActivity(choice, base) : base;
@@ -202,10 +274,20 @@ export async function addOnHitRiders(message, activity, card) {
       rolls.push(...riderRolls);
       added.push({ name: choice.item.name, formula: riderRolls.map(r => r.formula).join(" + "), total: riderRolls.reduce((s, r) => s + r.total, 0) });
     }
-    if (choice.rider.oncePerTurn && turnKey()) usedThisTurn.set(`${activity.actor.uuid}:${choice.identifier}`, turnKey());
+    if (rolls.length > before && choice.rider.after) afterwards.push(choice);
+    if (choice.oncePerTurn && turnKey()) usedThisTurn.set(`${activity.actor.uuid}:${choice.identifier}`, turnKey());
   }
   if (!rolls.length) return;
   await message.update({ rolls: [...message.rolls, ...rolls], [`flags.${MODULE_ID}.${RIDERS_FLAG}`]: added });
   debug(`riders: ${added.map(a => `${a.name} ${a.total}`).join(", ")}${isCritical ? " (critical)" : ""}`);
   console.log(`[${MODULE_ID}] on-hit riders: ${activity.actor.name} added ${added.map(a => `${a.name} (${a.formula} = ${a.total})`).join(", ")}`);
+
+  // What a rider does besides damage (Eldritch Smite's Prone, Lifedrinker's healing), noted with it.
+  for (const choice of afterwards) {
+    const notes = await choice.rider.after(choice, { activity, card, hits });
+    if (!notes?.length) continue;
+    const entry = added.find(a => a.name === choice.item.name);
+    if (entry) entry.note = notes.join("; ");
+  }
+  if (added.some(a => a.note)) await message.setFlag(MODULE_ID, RIDERS_FLAG, added);
 }

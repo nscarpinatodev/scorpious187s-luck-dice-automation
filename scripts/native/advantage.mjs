@@ -159,9 +159,18 @@ export function attackFacts(activity, config = {}) {
 }
 
 /**
+ * How much a spell conduit (Scorpious187's Custom Items: Kilian's Eldritch Rifle) multiplies this casting's
+ * range: its copy of the spell records it. It multiplies the whole range, so what this module adds to the
+ * range of a spell cast through one is multiplied too. 1 when the spell isn't channeled.
+ */
+export function conduitMultiplier(item) {
+  return Number(item?.flags?.["scorpious187s-custom-items"]?.conduitCast?.rangeMultiplier) || 1;
+}
+
+/**
  * The weapon's or activity's range in scene units: { normal, long } or null when it has none.
  * Spell Sniper extends a spell attack's range: doubled (2014), or 60 ft more for a range of 10 ft
- * or more (2024).
+ * or more (2024) — multiplied along with the rest by a spell conduit.
  */
 function rangeOf(fx) {
   const range = fx.item?.type === "weapon" ? fx.item.system?.range : fx.activity?.range;
@@ -175,8 +184,9 @@ function rangeOf(fx) {
   const spellSniper = fx.spell ? hasFeat(fx.actor, "spell-sniper") : null;
   if (spellSniper) {
     const feet = norm(units) === "ft" ? 1 : 0.3;
+    const mult = conduitMultiplier(fx.item);
     if (rulesOf(spellSniper) === "2014") normal *= 2;
-    else if (normal >= 10 * feet) normal += 60 * feet;
+    else if (normal / mult >= 10 * feet) normal += 60 * feet * mult;
   }
   return { normal, long: Number.isFinite(long) && long > normal ? long : null };
 }
