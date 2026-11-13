@@ -144,26 +144,14 @@ function isWorkflowResponder(workflow) {
 
 // ── Dialog helpers ────────────────────────────────────────────────────────────
 
-/** Show a multi-button choice dialog. Falls back to legacy Dialog if DialogV2 is absent. */
+/** Show a multi-button choice dialog. */
 async function promptChoice(title, content, buttons) {
   debug(`promptChoice: "${title}" — options: ${buttons.map((b) => b.action).join(", ")}`);
   const dialogButtons = buttons.map((b) => ({ action: b.action, label: b.label, callback: () => b.action }));
-
-  if (foundry?.applications?.api?.DialogV2) {
-    return foundry.applications.api.DialogV2.wait({ window: { title }, content, buttons: dialogButtons });
-  }
-  return Dialog.wait({
-    title, content,
-    buttons: Object.fromEntries(buttons.map((b) => [b.action, { label: b.label, callback: () => b.action }])),
-    default: buttons[0]?.action,
-    close: () => "decline"
-  });
+  return foundry.applications.api.DialogV2.wait({ window: { title }, content, buttons: dialogButtons });
 }
 
-/**
- * Show a slider input dialog. Returns the selected number, or null if cancelled.
- * Falls back to legacy Dialog if DialogV2 is absent.
- */
+/** Show a slider input dialog. Returns the selected number, or null if cancelled. */
 async function promptSlider(title, content, inputId, min, max, defaultVal = min) {
   debug(`promptSlider: "${title}" min=${min} max=${max} default=${defaultVal}`);
 
@@ -185,43 +173,20 @@ async function promptSlider(title, content, inputId, min, max, defaultVal = min)
     }
   }
 
-  if (foundry?.applications?.api?.DialogV2) {
-    return foundry.applications.api.DialogV2.prompt({
-      window: { title },
-      content: sliderHtml,
-      ok: {
-        label: "Confirm",
-        callback: (_event, button, html) => {
-          const el  = html?.querySelector?.(`#${inputId}`) ?? button?.form?.elements?.[inputId];
-          const val = Number(el?.value ?? defaultVal);
-          debug(`promptSlider result: ${val}`);
-          return val;
-        }
-      },
-      render: function() { wireSlider(this.element); },
-      rejectClose: false
-    });
-  }
-
-  return new Promise((resolve) => {
-    new Dialog({
-      title,
-      content: `<form>${sliderHtml}</form>`,
-      buttons: {
-        ok: {
-          label: "Confirm",
-          callback: (html) => {
-            const val = Number(html.find(`#${inputId}`).val() ?? defaultVal);
-            debug(`promptSlider result (legacy): ${val}`);
-            resolve(val);
-          }
-        },
-        cancel: { label: "Cancel", callback: () => resolve(null) }
-      },
-      default: "ok",
-      close: () => resolve(null),
-      render: (html) => wireSlider(html[0] ?? html)
-    }).render(true);
+  return foundry.applications.api.DialogV2.prompt({
+    window: { title },
+    content: sliderHtml,
+    ok: {
+      label: "Confirm",
+      callback: (_event, button, html) => {
+        const el  = html?.querySelector?.(`#${inputId}`) ?? button?.form?.elements?.[inputId];
+        const val = Number(el?.value ?? defaultVal);
+        debug(`promptSlider result: ${val}`);
+        return val;
+      }
+    },
+    render: function() { wireSlider(this.element); },
+    rejectClose: false
   });
 }
 
@@ -787,7 +752,8 @@ Hooks.once("init", () => {
     name: "Weapon Mastery",
     hint: "Carry out the 2024 Weapon Mastery property an attack used: Graze (damage on a miss), Topple (Constitution " +
           "save or Prone), Sap (disadvantage on the target's next attack), Vex (advantage on your next attack against " +
-          "it), Slow (−10 ft speed) and Push (10 ft, if you choose). Cleave and Nick aren't automated.",
+          "it), Slow (−10 ft speed), Push (10 ft, if you choose) and Cleave (an attack at a second creature, without your " +
+          "ability modifier to its damage). Nick isn't automated.",
     scope: "world",
     config: true,
     type: Boolean,
@@ -808,9 +774,9 @@ Hooks.once("init", () => {
     name, hint, scope: "world", config: true, type: Boolean, default: false
   });
   nativeToggle("opportunityAttacks", "Opportunity Attacks",
-    "When a creature moves out of an enemy's reach, offer the enemy an opportunity attack (its player, or the GM for NPCs), " +
-    "if it has its reaction. Not provoked when Disengaged (a status the module applies from Disengage features, or toggle it " +
-    "on the token HUD), teleporting, or being moved.");
+    "In combat, when a creature would move out of an enemy's reach, it stops at the last spot in reach and the enemy is offered " +
+    "an opportunity attack (its player, or the GM for NPCs), if it has its reaction; then it carries on. Not provoked when " +
+    "Disengaged (a status the module applies from Disengage features, or toggle it on the token HUD), teleporting, or being moved.");
   nativeToggle("retaliation", "Retaliation Damage",
     "Armor of Agathys (while its temporary HP last) and Fire Shield (within 5 ft) deal their damage back to a creature that " +
     "hits the caster with a melee attack.");
@@ -954,7 +920,7 @@ Hooks.once("init", () => {
     hint: "Offer reactions when they'd matter — on a hit: Shield, Defensive Duelist, Uncanny Dodge, and allies' Cutting " +
           "Words and Silvery Barbs; before damage: Absorb Elements, Parry; after damage: Hellish Rebuke. Asked of the " +
           "creature's player (or the GM); each is used through dnd5e. One reaction per creature until its next turn " +
-          "(shared with opportunity attacks).",
+          "(shared with opportunity attacks), shown in combat by a Reaction Used status you can toggle on the token HUD.",
     scope: "world",
     config: true,
     type: String,

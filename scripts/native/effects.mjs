@@ -3,7 +3,7 @@
 
 import { isPrivateGMCard, playerTargets, recordOutcome, outcomeTitle } from "./outcome.mjs";
 import { doubledDuration, METAMAGIC_FLAG } from "./metamagic.mjs";
-import { MODULE_ID, getPrivateRollOutcome, isEffectAutomationEnabled, socket, getPrimaryGM, resolveTarget, APPLIED_EFFECTS_FLAG } from "./shared.mjs";
+import { MODULE_ID, getPrivateRollOutcome, isEffectAutomationEnabled, socket, getPrimaryGM, resolveTarget, APPLIED_EFFECTS_FLAG, antimagicStops } from "./shared.mjs";
 
 // ── Effect automation ─────────────────────────────────────────────────────────
 // The "effectAutomation" setting: an activity's effects (the ones listed on its
@@ -56,6 +56,7 @@ export async function applyActivityEffects({ usageId, targets }) {
   const effects = await usage.system.getEffects();
   // Extended Spell (metamagic.mjs): the spell's effects last twice as long.
   const extended = usage.getFlag?.(MODULE_ID, METAMAGIC_FLAG)?.name === "Extended Spell";
+  const source = usage.getAssociatedItem?.() ?? usage.getAssociatedActivity?.()?.item ?? null;
 
   const applied = [];
   for (const target of targets ?? []) {
@@ -64,7 +65,13 @@ export async function applyActivityEffects({ usageId, targets }) {
     const names = [];
     const undo  = [];
     const immunities = actor.system?.traits?.ci?.value;
+    // Antimagic (dnd5e 6.1+): a spell's or Magical feature's effects don't reach this creature.
+    const shielded = antimagicStops(actor, source);
     for (const effect of effects.filter(e => target.effectIds?.includes(e.id))) {
+      if (shielded) {
+        names.push(`${effect.name} (antimagic)`);
+        continue;
+      }
       // Conditions the creature is immune to (dnd5e would ignore them, but still show the effect).
       const statuses = [...(effect.statuses ?? [])];
       if (statuses.length && statuses.every(s => immunities?.has?.(s))) {

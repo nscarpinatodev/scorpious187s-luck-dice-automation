@@ -1,7 +1,7 @@
 // ── Scorpious187's Luck Dice Automation — Native dnd5e 6 ──────────────────────
 // Who a use affects: the creatures in a placed area, choosing among them, and target confirmation.
 
-import { getTargetConfirmation, escapeHTML } from "./shared.mjs";
+import { getTargetConfirmation, escapeHTML, isLike } from "./shared.mjs";
 import { behindBarrier, effectBarriers, areaOrigin } from "./walls.mjs";
 
 /**
@@ -123,7 +123,7 @@ export function needsConfirmation(activity, results) {
 
 /** Whether an ordinary attack's targets are confirmed first (the setting's "every attack" choice). */
 export function needsAttackConfirmation(activity, results) {
-  return activity?.type === "attack" && getTargetConfirmation() === "every" && needsConfirmation(activity, results);
+  return isLike(activity, "attack") && getTargetConfirmation() === "every" && needsConfirmation(activity, results);
 }
 
 /**

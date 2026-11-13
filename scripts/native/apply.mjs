@@ -2,7 +2,7 @@
 // Applying a damage card to targets on the GM's client, recorded for the Applied row and Undo.
 
 import { isPrivateGMCard, useKey, playerTargets, recordOutcome, outcomeTitle } from "./outcome.mjs";
-import { MODULE_ID, getPrivateRollOutcome, getReactionPrompts, APPLIED_FLAG, socket } from "./shared.mjs";
+import { MODULE_ID, getPrivateRollOutcome, getReactionPrompts, APPLIED_FLAG, socket, antimagicStops } from "./shared.mjs";
 import { damageReactions, afterDamageReactions } from "./reactions.mjs";
 
 /** Apply a damage card to targets — directly as a GM, otherwise via the primary GM. */
@@ -42,8 +42,9 @@ export async function applyCardDamage({ messageId, targets, outcomeKey }) {
   const damageRolls = message.rolls.filter(r => r instanceof CONFIG.Dice.DamageRoll);
   if (!damageRolls.length) return;
 
+  // Positive for healing too, as dnd5e's own damage tray passes it: Actor5e#calculateDamage negates healing itself.
   const toDamages = (rolls) => aggregate(rolls, { respectProperties: true }).map(roll => ({
-    value:      Math.max(0, roll.total) * (roll.options.type in CONFIG.DND5E.healingTypes ? -1 : 1),
+    value:      Math.max(0, roll.total),
     type:       roll.options.type,
     properties: new Set(roll.options.properties ?? [])
   }));
@@ -51,11 +52,20 @@ export async function applyCardDamage({ messageId, targets, outcomeKey }) {
   const baseRolls   = damageRolls.filter(r => !r.options?.ldaLuckDice);
   const baseDamages = baseRolls.length < damageRolls.length ? toDamages(baseRolls) : damages;
 
+  const source = message.getAssociatedItem?.() ?? message.getAssociatedActivity?.()?.item ?? null;
   const applied = [];
   for (const target of targets ?? []) {
     const actor = (await fromUuid(target.token))?.actor ?? await fromUuid(target.actor);
     if (!actor?.applyDamage) continue;
+    // Antimagic (dnd5e 6.1+): a spell's or Magical feature's damage or healing doesn't reach this creature.
+    if (antimagicStops(actor, source)) {
+      applied.push({ token: target.token, actor: actor.uuid, name: target.name ?? actor.name, amount: 0, reactions: ["antimagic"] });
+      continue;
+    }
     const multiplier = Number.isFinite(target.multiplier) ? target.multiplier : 1;
+    // dnd5e 6.1+: the card's own application options (ignored resistances, downgraded immunities),
+    // merged in as its Apply button does. Earlier versions have none.
+    const options = message.system?.getDamageApplicationOptions?.({ multiplier }) ?? { multiplier };
     // Reactions to the incoming damage (Absorb Elements, Parry) — for a single instance of damage.
     let cardDamages = damages, notes = [], afterApply = null;
     if (!Number.isFinite(target.hits) && getReactionPrompts() !== "off") {
@@ -67,11 +77,13 @@ export async function applyCardDamage({ messageId, targets, outcomeKey }) {
     const instances = Number.isFinite(target.hits)
       ? Array.from({ length: Math.max(1, Math.floor(target.hits)) }, (_, i) => (target.luck && i === 0) ? damages : baseDamages)
       : [cardDamages];
-    let amount = 0;
+    let amount = 0, temp = 0;
     const before = sourceHP(actor);
     for (const instance of instances) {
-      amount += Number(actor.calculateDamage?.(instance, { multiplier })?.amount ?? 0);
-      await actor.applyDamage(instance, { multiplier, isDelta: true, originatingMessage: message });
+      const calculated = actor.calculateDamage?.(instance, options);
+      amount += Number(calculated?.amount ?? 0);
+      temp   += Number(calculated?.temp ?? 0);
+      await actor.applyDamage(instance, { ...options, isDelta: true, originatingMessage: message });
     }
     const after  = sourceHP(actor);
     const hits   = instances.length;
@@ -79,6 +91,7 @@ export async function applyCardDamage({ messageId, targets, outcomeKey }) {
     if (afterApply) await afterApply().catch(err => console.error(`[${MODULE_ID}] after-damage reaction:`, err));
     applied.push({
       token: target.token, actor: actor.uuid, name: target.name ?? actor.name, amount, saved: !!target.saved,
+      ...(temp > 0 ? { temp } : {}),
       ...(hits > 1 ? { hits } : {}), ...(target.luck && baseDamages !== damages ? { luck: true } : {}),
       ...(notes.length ? { reactions: notes } : {}),
       // What this application changed (before − after), for Undo. applyDamage changes exactly these.

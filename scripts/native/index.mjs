@@ -19,8 +19,8 @@ import { onAttackRolled, onDamageRolled, skipAttackDialog, finalRollDialog } fro
 import { autoRolledEnabled, targetAutoRolledArea, applyAutoRolledCard, confirmAndRoll, skipAutoRolledDamageDialog } from "./autoroll.mjs";
 import { injectNativeHistory } from "./cards.mjs";
 import { D20_TESTS, onD20TestRolled, onConcentrationRolled, onSaveRolled } from "./checks.mjs";
-import { applyMasteryGM } from "./mastery.mjs";
-import { onDisengageUsed, onTurnEndDisengage, onTokenMovedOA } from "./opportunity.mjs";
+import { applyMasteryGM, onPreRollDamageCleave } from "./mastery.mjs";
+import { onDisengageUsed, onTurnEndDisengage, onPreMoveTokenOA } from "./opportunity.mjs";
 import { recordAgathys, onActorUpdatedAgathys, retaliateGM } from "./retaliation.mjs";
 import { onTurnStartDeathSave, onPreApplyDamage, onDamageAppliedDeath, onPostRollDeathSave } from "./deathsaves.mjs";
 import { rememberAreas, clearAreaGM, tagAreaGM, onPreDeleteRegion, onConcentrationEnded } from "./areas.mjs";
@@ -33,14 +33,14 @@ import { rayCount, fireRays } from "./projectiles.mjs";
 import { claimRiderUse } from "./riders.mjs";
 import { recordLingeringArea, tagLingeringArea, onTurnChange, onTokenMoved, onRegionChanged } from "./lingering.mjs";
 import { onEffectCreated, onTurnEndRepeatSaves } from "./repeat-saves.mjs";
-import { answerReaction, pendingReactions, onTurnStartReaction } from "./reactions.mjs";
+import { answerReaction, pendingReactions, onTurnStartReaction, onCombatEndedReactions } from "./reactions.mjs";
 import { onPreRollAttack, onPreRollDamage, onPreRollDamageFeats, onRenderAttackDialog, consumeAttackMarks, consumeAttackMarkGM } from "./advantage.mjs";
 import { onPreRollSave, onRenderSaveDialog, installAutoFail } from "./save-rules.mjs";
 import { rollExtras, markBoostTargets, markBardicGM, consumeBoostGM, endBoostSpellGM } from "./boosts.mjs";
 import { onPreRollAttackInvocations, onPreRollDamageInvocations, onDamageAppliedGift, onTurnStartCloak, onMaddeningHexUsed } from "./invocations.mjs";
 import { onPreUseMetamagic, onRenderUsageDialog, onMetamagicUsed, onPreRollDamageMetamagic, onPreRollConcentrationMetamagic } from "./metamagic.mjs";
 import { noResults, rollGMSaves, rollPlayerSave, onActivityUsed } from "./saves.mjs";
-import { LDA, MODULE_ID, getPrivateRollOutcome, pendingLuckDamage, pendingAttacks, socket, pendingLuckChecks, pendingSaveRequests, trackPending, setSocket } from "./shared.mjs";
+import { LDA, MODULE_ID, getPrivateRollOutcome, pendingLuckDamage, pendingAttacks, socket, pendingLuckChecks, pendingSaveRequests, trackPending, setSocket, isLike } from "./shared.mjs";
 import { needsConfirmation, needsAttackConfirmation } from "./targeting.mjs";
 
 // ── Hooks ─────────────────────────────────────────────────────────────────────
@@ -147,6 +147,7 @@ Hooks.once("ready", () => {
   Hooks.on("dnd5e.preRollV2", finalRollDialog);
   Hooks.on("dnd5e.preRollDamageV2", onPreRollDamage); // automatic critical hits; never cancels
   Hooks.on("dnd5e.preRollDamageV2", onPreRollDamageFeats); // 2024 Crossbow Expert's off-hand damage; never cancels
+  Hooks.on("dnd5e.preRollDamageV2", onPreRollDamageCleave); // a Cleave attack's damage: no ability modifier; never cancels
   Hooks.on("dnd5e.preRollDamageV2", skipAutoRolledDamageDialog); // never cancels
   Hooks.on("dnd5e.rollAttackV2", (rolls) =>
     consumeAttackMarks(rolls?.[0]?.parent).catch(err => console.error(`[${MODULE_ID}] attack marks:`, err)));
@@ -156,7 +157,7 @@ Hooks.once("ready", () => {
   Hooks.on("dnd5e.rollDamageV2", (rolls, data) => {
     const message = rolls?.[0]?.parent;
     trackPending(pendingLuckDamage, message?.id, onDamageRolled(rolls, data));
-    if (data?.subject?.type === "heal" || data?.subject?.type === "damage") {
+    if (isLike(data?.subject, "heal") || isLike(data?.subject, "damage")) {
       applyAutoRolledCard(message, data.subject).catch(err => console.error(`[${MODULE_ID}] ${data.subject.type} automation:`, err));
     }
     if (message && isPrivateGMCard(message) && getPrivateRollOutcome() === "share") {
@@ -165,7 +166,10 @@ Hooks.once("ready", () => {
   });
   // Lingering areas: turns, movement, and areas moving (watched by the primary GM).
   // Turn changes: lingering areas, then repeat saves for the creature whose turn ended.
-  Hooks.on("combatTurnChange", (combat, prior, current) => onTurnStartReaction(combat, current));
+  Hooks.on("combatTurnChange", (combat, prior, current) =>
+    onTurnStartReaction(combat, current).catch(err => console.error(`[${MODULE_ID}] reaction back:`, err)));
+  Hooks.on("deleteCombat", (combat) =>
+    onCombatEndedReactions(combat).catch(err => console.error(`[${MODULE_ID}] reactions back:`, err)));
   // The turn that ended: Disengaged ends. The turn that starts: its summary, then a dying character's death save.
   Hooks.on("combatTurnChange", (combat, prior, current) => {
     onTurnEndDisengage(combat, prior).catch(err => console.error(`[${MODULE_ID}] disengage:`, err));
@@ -193,10 +197,10 @@ Hooks.once("ready", () => {
       .catch(err => console.error(`[${MODULE_ID}] repeat saves:`, err)));
   Hooks.on("createActiveEffect", (effect) =>
     onEffectCreated(effect).catch(err => console.error(`[${MODULE_ID}] repeat saves:`, err)));
-  Hooks.on("moveToken", (tokenDoc, movement, operation) => {
+  Hooks.on("moveToken", (tokenDoc, movement) => {
     onTokenMoved(tokenDoc, movement).catch(err => console.error(`[${MODULE_ID}] lingering move:`, err));
-    onTokenMovedOA(tokenDoc, movement, operation).catch(err => console.error(`[${MODULE_ID}] opportunity attacks:`, err));
   });
+  Hooks.on("preMoveToken", onPreMoveTokenOA); // returns false only to remake the movement in legs
   Hooks.on("updateRegion", (region, changes) =>
     onRegionChanged(region, changes).catch(err => console.error(`[${MODULE_ID}] lingering region:`, err)));
   // dnd5e's concentration prompt when a concentrating creature takes damage.
@@ -221,14 +225,13 @@ Hooks.once("ready", () => {
     onDisengageUsed(activity).catch(err => console.error(`[${MODULE_ID}] disengage:`, err));
     recordAgathys(activity, usageConfig).catch(err => console.error(`[${MODULE_ID}] armor of agathys:`, err));
     markBoostTargets(activity, results).catch(err => console.error(`[${MODULE_ID}] roll boosts:`, err));
-    const type     = activity?.type;
     const followUp = usageConfig?.subsequentActions !== false;
-    if (type === "heal" || type === "damage") {
+    if (isLike(activity, "heal") || isLike(activity, "damage")) {
       if (followUp && autoRolledEnabled(activity) && needsConfirmation(activity, results)) {
         usageConfig.subsequentActions = false; // rolled once the targets are confirmed
         confirmAndRoll(activity, usageConfig, results).catch(err => console.error(`[${MODULE_ID}] target confirmation:`, err));
       } else targetAutoRolledArea(activity, results); // dnd5e rolls next
-    } else if (type === "attack") {
+    } else if (isLike(activity, "attack")) {
       const rays = followUp ? rayCount(activity, results?.message) : null;
       if (rays) {
         usageConfig.subsequentActions = false; // one attack per ray instead

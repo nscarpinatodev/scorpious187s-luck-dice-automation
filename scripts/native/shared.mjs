@@ -77,3 +77,69 @@ export async function resolveTarget(target) {
 }
 
 export const APPLIED_EFFECTS_FLAG = "appliedEffects";
+
+/**
+ * Whether an activity is of this type ("attack", "save", "damage", "heal"…), or one that dnd5e 6.1 lets declare
+ * itself like it — another module's activity type that works as an attack, say. Earlier versions: just its type.
+ */
+export const isLike = (activity, type) =>
+  typeof activity?.isLike === "function" ? activity.isLike(type) : activity?.type === type;
+
+// ── Antimagic ─────────────────────────────────────────────────────────────────
+// dnd5e 6.1's Antimagic region gives the creatures inside it the "antimagic" status; dnd5e then suppresses
+// their magical effects and magic items' bonuses, and hides their spells. Spells and other magic still
+// reach them, so the module's automation leaves them out: no save, damage or effect from a spell or a
+// Magical feature, and none of those offered to them as reactions, riders or boosts. Earlier versions
+// have no such status, so nothing changes there.
+
+export const ANTIMAGIC = "antimagic";
+
+/** Whether this creature is in antimagic. */
+export const inAntimagic = (actor) => !!actor?.statuses?.has?.(ANTIMAGIC);
+
+/**
+ * Whether an item works by magic, so antimagic stops it: a spell, or a feature or item marked Magical
+ * (dnd5e 6.1 marks Eldritch Smite, Font of Magic…). Not a weapon: its strike still lands, magic aside.
+ */
+export const isMagical = (item) => item?.type === "spell"
+  || (item?.type !== "weapon" && !!item?.system?.properties?.has?.("mgc"));
+
+/** Whether antimagic keeps this source (an activity, or an item) from this creature, either side of it. */
+export const antimagicStops = (actor, source) => inAntimagic(actor) && isMagical(source?.item ?? source);
+
+// ── dnd5e 6.1's stock effects ─────────────────────────────────────────────────
+// Its Effects compendium has Disengaged, No Opportunity Attacks and No Reactions. They carry no status or rule,
+// so they're known by where they came from. Features apply them (2024 Monk's Focus: Disengaged), or a GM does.
+
+export const STOCK_EFFECTS = Object.freeze({
+  disengaged: "DovP6Uo8YmIohHeK", noOpportunityAttacks: "qfTVWq97wiQgSSSM", noReactions: "tZuPpkTWg8lVjxhL"
+});
+
+/** Whether an effect is a copy of one of dnd5e's stock effects (a STOCK_EFFECTS key). */
+export function isStockEffect(effect, key) {
+  const uuid = `Compendium.dnd5e.effects.ActiveEffect.${STOCK_EFFECTS[key]}`;
+  return [effect?._stats?.compendiumSource, effect?._stats?.duplicateSource, effect?.flags?.core?.sourceId].includes(uuid);
+}
+
+/** The creature's copies of a stock effect. */
+export const stockEffectsOf = (actor, key) => [...(actor?.effects ?? [])].filter(e => isStockEffect(e, key));
+
+/** Whether a stock effect is in force on the creature. */
+export const hasStockEffect = (actor, key) => stockEffectsOf(actor, key).some(e => !e.disabled && !e.isSuppressed);
+
+// ── Dice added to a card ──────────────────────────────────────────────────────
+// Dice So Nice 6 animates rolls added to a chat card by an update, to whoever may see them. Showing them
+// as well would roll the same dice twice. Earlier versions don't, so there they're shown by hand first.
+
+const diceSoNiceAnimatesAddedRolls = () => typeof game.dice3d?.pipeline?.messageUpdateHideSelector === "string";
+
+/** Before adding a roll to a card: show it, unless Dice So Nice will when it's added. */
+export async function showRollToAdd(roll) {
+  if (game.dice3d && !diceSoNiceAnimatesAddedRolls()) await game.dice3d.showForRoll(roll, game.user, true, null, false);
+}
+
+/** After adding rolls to a card: wait for Dice So Nice's animation of them, so damage lands with the dice. */
+export async function waitForAddedRolls(message) {
+  if (!message?.id || !diceSoNiceAnimatesAddedRolls() || !game.dice3d.waitFor3DAnimationByMessageID) return;
+  await Promise.race([game.dice3d.waitFor3DAnimationByMessageID(message.id), new Promise(r => setTimeout(r, 15_000))]);
+}

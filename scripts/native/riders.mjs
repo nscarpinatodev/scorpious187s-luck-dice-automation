@@ -13,13 +13,14 @@
 // attack automation apply them as part of the same hit (one instance of damage).
 // A rider that spends something (Divine Smite's spell slot, limited uses) is used
 // through dnd5e first, with its own dialog; dnd5e's follow-up roll for that use
-// is suppressed (see claimRiderUse) so its dice land on the hit instead.
+// is suppressed (see claimRiderUse) so its dice land on the hit instead. A once-per-turn
+// rider whose only cost is its own use (2024 Sneak Attack) just has that use marked spent.
 // Under the "invocations" setting instead (invocations.mjs): Eldritch Smite (a Pact
 // Magic slot; then Prone, if the target is Huge or smaller) and Lifedrinker (2014:
 // the Charisma modifier as necrotic damage, on every pact weapon hit; 2024: 1d6 of a
 // chosen type once per turn, then a Hit Die spent to heal, if wanted).
 
-import { MODULE_ID, debug, escapeHTML, isOnHitRidersEnabled, isInvocationsEnabled, promptChoice, NO_DIALOG } from "./shared.mjs";
+import { MODULE_ID, debug, escapeHTML, isOnHitRidersEnabled, isInvocationsEnabled, promptChoice, NO_DIALOG, showRollToAdd, waitForAddedRolls, antimagicStops, isLike } from "./shared.mjs";
 import { tokenDistance, rulesOf } from "./advantage.mjs";
 import { isPactWeapon } from "./invocations.mjs";
 import { applyMasteryChange } from "./mastery.mjs";
@@ -31,7 +32,7 @@ const isWeaponAttack = (activity) => ["weapon", "unarmed"].includes(activity?.at
 const isMelee  = (activity, card) => activity?.attack?.type?.value === "melee" && !String(card?.system?.mode ?? "").startsWith("thrown");
 const isRanged = (activity, card) => activity?.attack?.type?.value === "ranged" || String(card?.system?.mode ?? "").startsWith("thrown");
 const creatureType = (actor) => actor?.system?.details?.type?.value ?? actor?.system?.details?.race?.type ?? null;
-const damageActivities = (item) => [...(item?.system?.activities?.values?.() ?? [])].filter(a => a.type === "damage");
+const damageActivities = (item) => [...(item?.system?.activities?.values?.() ?? [])].filter(a => isLike(a, "damage"));
 
 /** By item identifier: how the rider is offered, when, and which damage activities it rolls. */
 export const RIDERS = {
@@ -108,7 +109,7 @@ async function lifedrinkerDamage(choice, { activity, isCritical }) {
 /** Lifedrinker 2024: offer to spend a Hit Die to heal — its heal activity, used through dnd5e. */
 async function lifedrinkerHeal(choice) {
   if (rulesOf(choice.item) === "2014") return [];
-  const heal = [...(choice.item.system?.activities?.values?.() ?? [])].find(a => a.type === "heal");
+  const heal = [...(choice.item.system?.activities?.values?.() ?? [])].find(a => isLike(a, "heal"));
   if (!heal) return [];
   const answer = await promptChoice("Lifedrinker", "<p>Spend a Hit Point Die to regain hit points?</p>",
     [{ action: "heal", label: "Spend a Hit Die" }, { action: "no", label: "No" }]);
@@ -159,6 +160,7 @@ export async function eligibleRiders(activity, card) {
     const identifier = item.system?.identifier;
     const rider = RIDERS[identifier];
     if (!rider || item === activity.item || !(rider.setting ?? isOnHitRidersEnabled)()) continue;
+    if (antimagicStops(actor, item)) continue; // dnd5e 6.1+: no spell or Magical feature in antimagic
     const mode = typeof rider.mode === "function" ? rider.mode(item) : rider.mode;
     const oncePerTurn = typeof rider.oncePerTurn === "function" ? rider.oncePerTurn(item) : !!rider.oncePerTurn;
     if (mode === "mark") {
@@ -201,11 +203,38 @@ async function chooseRiders(card, choices, marks) {
  * activity takes one), or item uses / resources. A mark's bonus damage never
  * does — the mark was paid for when it was cast (some legacy data says otherwise).
  */
-export function spendsSomething({ item, rider, activities, mode }) {
+export function spendsSomething({ item, rider, activities, mode, oncePerTurn }) {
   if ((mode ?? rider?.mode) === "mark" || rider?.roll) return false;
   const activity = activities[0];
   if (item.type === "spell") return (item.system?.level ?? 0) > 0 && activity?.consumption?.spellSlot !== false;
+  if (oncePerTurn && ownUsesOnly(activity)) return false;
   return (activity?.consumption?.targets?.length ?? 0) > 0;
+}
+
+/** A consumption target that spends the activity's own uses, or its own item's (no other item named). */
+const ownUseTarget = (t, activity) => t?.type === "activityUses"
+  || (t?.type === "itemUses" && (!t.target || t.target === activity?.item?.id));
+
+/**
+ * Whether an activity's only cost is its own uses — 2024 Sneak Attack from dnd5e 6.1 (one use, back
+ * every turn: the item's; the activity's in the pre-release). For a once-per-turn rider that's the
+ * limit this module already keeps, so it's rolled as before, without dnd5e's use (its window and
+ * card), and a use is marked spent while one is left.
+ */
+const ownUsesOnly = (activity) => {
+  const targets = activity?.consumption?.targets ?? [];
+  return targets.length > 0 && targets.every(t => ownUseTarget(t, activity));
+};
+
+/** Marks a rider's own use spent — the activity's or its item's — when one is left (never blocks the rider). */
+async function spendOwnUse(activity) {
+  const target = activity?.consumption?.targets?.[0];
+  const onItem = target?.type === "itemUses";
+  const doc = onItem ? activity.item : activity;
+  const uses = onItem ? activity.item?.system?.uses : activity?.uses;
+  if (!uses?.max || !(Number(uses.value) > 0) || typeof doc?.update !== "function") return;
+  const cost = Math.max(1, Number(target?.value) || 1);
+  await doc.update({ [onItem ? "system.uses.spent" : "uses.spent"]: (Number(uses.spent) || 0) + Math.min(cost, Number(uses.value)) });
 }
 
 // ── A rider used through dnd5e (to spend its slot or uses) ───────────────────
@@ -228,7 +257,12 @@ export function claimRiderUse(activity, usageConfig) {
 
 /** The activity to roll for a rider: as is, or after using it through dnd5e. Null if the use was cancelled. */
 async function riderActivity(choice, activity) {
-  if (!spendsSomething(choice)) return activity;
+  if (!spendsSomething(choice)) {
+    if (choice.oncePerTurn && ownUsesOnly(activity)) {
+      await spendOwnUse(activity).catch(err => console.error(`[${MODULE_ID}] riders: ${choice.item.name}'s use:`, err));
+    }
+    return activity;
+  }
   const claimed = new Promise(resolve => pendingRiderUses.set(choice.item.id, resolve));
   try {
     const results = await activity.use({ subsequentActions: true }, {}, {});
@@ -260,7 +294,7 @@ export async function addOnHitRiders(message, activity, card) {
     if (choice.rider.roll) {
       // A rider that rolls its own damage (Lifedrinker).
       const riderRolls = (await choice.rider.roll(choice, { activity, card, isCritical })) ?? [];
-      if (game.dice3d) for (const r of riderRolls) await game.dice3d.showForRoll(r, game.user, true, null, false);
+      for (const r of riderRolls) await showRollToAdd(r);
       rolls.push(...riderRolls);
       if (riderRolls.length) added.push({ name: choice.item.name, formula: riderRolls.map(r => r.formula).join(" + "), total: riderRolls.reduce((s, r) => s + r.total, 0) });
     }
@@ -270,7 +304,7 @@ export async function addOnHitRiders(message, activity, card) {
       if (!act) break;
       const riderRolls = await act.rollDamage({ isCritical, ...NO_DIALOG }, { configure: false }, { create: false });
       if (!riderRolls?.length) continue;
-      if (game.dice3d) for (const r of riderRolls) await game.dice3d.showForRoll(r, game.user, true, null, false);
+      for (const r of riderRolls) await showRollToAdd(r);
       rolls.push(...riderRolls);
       added.push({ name: choice.item.name, formula: riderRolls.map(r => r.formula).join(" + "), total: riderRolls.reduce((s, r) => s + r.total, 0) });
     }
@@ -279,6 +313,7 @@ export async function addOnHitRiders(message, activity, card) {
   }
   if (!rolls.length) return;
   await message.update({ rolls: [...message.rolls, ...rolls], [`flags.${MODULE_ID}.${RIDERS_FLAG}`]: added });
+  await waitForAddedRolls(message);
   debug(`riders: ${added.map(a => `${a.name} ${a.total}`).join(", ")}${isCritical ? " (critical)" : ""}`);
   console.log(`[${MODULE_ID}] on-hit riders: ${activity.actor.name} added ${added.map(a => `${a.name} (${a.formula} = ${a.total})`).join(", ")}`);
 

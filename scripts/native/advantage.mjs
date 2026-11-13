@@ -27,7 +27,7 @@
 // with exactly one target (dnd5e rolls once for all of them). The reasons are
 // shown in dnd5e's roll window and on the attack card.
 
-import { MODULE_ID, debug, escapeHTML, isAttackAdvantageEnabled, isAutoCritsEnabled, isWeaponMasteryEnabled, socket } from "./shared.mjs";
+import { MODULE_ID, debug, escapeHTML, isAttackAdvantageEnabled, isAutoCritsEnabled, isWeaponMasteryEnabled, socket, isLike } from "./shared.mjs";
 import { MASTERY_FLAG } from "./mastery.mjs";
 
 export const ATTACK_REASONS_FLAG = "attackReasons";
@@ -83,13 +83,43 @@ export function tokenDistance(a, b) {
   return Math.max(0, d - ((a.width + b.width) / 2) * grid.distance + grid.distance);
 }
 
-/** Whether walls block sight between two tokens. */
+// Foundry 14 Scene Levels: each wall belongs to a level, and floors and ceilings (surfaces) lie between
+// levels. Unless told which level and elevation to test, Foundry's collision tests use the level the user
+// is viewing, at its base elevation, so a test between two tokens names their own levels and heights.
+
+/** A token's level (Foundry 14), or null where the scene has none — Foundry then uses the viewed one. */
+export function levelOf(token) {
+  const d = doc(token);
+  const id = d?._source?.level ?? d?.level?.id ?? d?.level;
+  return (id && d?.parent?.levels?.get?.(id)) || null;
+}
+
+/** A token's centre, at its own height: its elevation plus half its depth (the middle of its space). */
+export function elevatedCenter(token) {
+  const t = doc(token), grid = canvas?.grid;
+  const size = grid?.size ?? 100, distance = grid?.distance ?? 5;
+  const center = t.object?.center ?? { x: t.x + ((t.width ?? 1) * size) / 2, y: t.y + ((t.height ?? 1) * size) / 2 };
+  return { x: center.x, y: center.y, elevation: (Number(t.elevation) || 0) + ((Number(t.depth ?? t.width) || 1) * distance) / 2 };
+}
+
+/**
+ * Whether walls, floors or ceilings block sight between two tokens. On a scene with levels, sight is blocked
+ * by a wall on either token's level, or by a surface between them (Foundry's own vision tests both levels).
+ */
 export function hasLineOfSight(a, b) {
   a = doc(a); b = doc(b);
   const backend = CONFIG.Canvas?.polygonBackends?.sight;
-  const center = (t) => t.object?.center ?? { x: t.x, y: t.y };
-  if (!backend?.testCollision) return true;
-  try { return !backend.testCollision(center(a), center(b), { type: "sight", mode: "any" }); } catch { return true; }
+  if (!backend?.testCollision || !a || !b) return true;
+  const from = elevatedCenter(a), to = elevatedCenter(b);
+  const levels = [...new Set([levelOf(a), levelOf(b)].filter(Boolean))];
+  try {
+    if (!levels.length) return !backend.testCollision(from, to, { type: "sight", mode: "any" });
+    for (const level of levels) {
+      if (a.parent?.testSurfaceCollision?.(from, to, { type: "sight", mode: "any", level })) return false;
+      if (backend.testCollision(from, to, { type: "sight", mode: "any", level })) return false;
+    }
+    return true;
+  } catch { return true; }
 }
 
 // ── Where effects came from ───────────────────────────────────────────────────
@@ -127,6 +157,25 @@ export function sourceActor(effect) {
 /** Active effects on an actor that came from an item with this identifier. */
 function effectsFrom(actor, identifier) {
   return [...(actor?.effects ?? [])].filter(e => !e.disabled && !e.isSuppressed && sourceItem(e)?.system?.identifier === identifier);
+}
+
+// Effects that take away a creature's opportunity attacks or reactions. dnd5e's SRD gives them no status or
+// rule, so they're known by where they came from (and end when dnd5e expires them):
+//   2024 Shocking Grasp ("Shocked") and Brutal Strike's Staggering Blow ("Staggered") — no opportunity attacks;
+//   2014 Shocking Grasp — no reactions at all.
+const STAGGERED_EFFECT = "uacly0JAXLVwAS6y"; // Brutal Strike's "Staggered", of its three effects
+const isStaggered = (effect) => [effect._stats?.duplicateSource, effect._stats?.compendiumSource]
+  .some(uuid => String(uuid ?? "").endsWith(`.ActiveEffect.${STAGGERED_EFFECT}`)) || /\bstagger/i.test(effect.name ?? "");
+
+/** Whether the creature can't make opportunity attacks: Shocked (2024 Shocking Grasp) or Staggered (Brutal Strike). */
+export function cantMakeOpportunityAttacks(actor) {
+  return effectsFrom(actor, "shocking-grasp").some(e => rulesOf(sourceItem(e)) !== "2014")
+    || effectsFrom(actor, "brutal-strike").some(isStaggered);
+}
+
+/** Whether the creature can't take reactions: hit by a 2014 Shocking Grasp. */
+export function cantTakeReactions(actor) {
+  return effectsFrom(actor, "shocking-grasp").some(e => rulesOf(sourceItem(e)) === "2014");
 }
 
 const hasFeat = (actor, identifier) => actor?.items?.find?.(i => i.system?.identifier === identifier) ?? null;
@@ -385,7 +434,7 @@ export function onPreRollAttack(config, dialog, message) {
   const full = isAttackAdvantageEnabled();
   if (!full && !isWeaponMasteryEnabled()) return;
   const activity = config?.subject;
-  if (activity?.type !== "attack") return;
+  if (!isLike(activity, "attack")) return;
   let reasons;
   try { reasons = full ? attackReasons(activity, config) : masteryReasons(activity, config); }
   catch (err) { console.error(`[${MODULE_ID}] attack reasons:`, err); return; }
@@ -450,7 +499,7 @@ export function onPreRollDamageFeats(config) {
   if (!isAttackAdvantageEnabled()) return;
   const activity = config?.subject;
   const item = activity?.item;
-  if (activity?.type !== "attack" || !String(config.attackMode ?? "").endsWith("offhand")) return;
+  if (!isLike(activity, "attack") || !String(config.attackMode ?? "").endsWith("offhand")) return;
   if (item?.type !== "weapon" || !isCrossbow(item) || !item.system?.properties?.has?.("lgt")) return;
   const feat = hasFeat(activity.actor, "crossbow-expert");
   if (!feat || rulesOf(feat) !== "2024") return;
@@ -567,7 +616,7 @@ export async function consumeAttackMarkGM({ uuid }) {
 export function onPreRollDamage(config, dialog, message) {
   if (!isAutoCritsEnabled() || config?.isCritical || ac5eCovers().statuses) return;
   const activity = config?.subject;
-  if (activity?.type !== "attack") return;
+  if (!isLike(activity, "attack")) return;
   const attacker = doc(activity.getUsageToken?.() ?? activity.actor?.getActiveTokens?.()?.[0]);
   const descriptors = message?.data?.system?.targets;
   const targets = Array.isArray(descriptors) && descriptors.length

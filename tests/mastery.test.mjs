@@ -2,7 +2,7 @@
 import { env } from "./env.mjs";
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { applyWeaponMastery, pushDestination, MASTERY_FLAG, MASTERY_RESULT_FLAG } from "../scripts/native/mastery.mjs";
+import { applyWeaponMastery, pushDestination, cleaveCandidates, onPreRollDamageCleave, MASTERY_FLAG, MASTERY_RESULT_FLAG, CLEAVE_FLAG } from "../scripts/native/mastery.mjs";
 import { offerLegendaryResistance, breakConcentrationIfFailed } from "../scripts/native/checks.mjs";
 import { onPreRollDamage, attackReasons } from "../scripts/native/advantage.mjs";
 
@@ -125,6 +125,66 @@ test("Push: offered for Large or smaller; moves 10 ft straight away", async () =
   assert.equal(orc.doc.x, 300);                       // 2 spaces further along +x
   assert.equal(giant.doc.updates, undefined);         // Huge: not pushed
   assert.deepEqual(pushDestination(fighter.doc, orc.doc, 10)?.feet, 10);
+});
+
+test("Cleave: a second creature within 5 ft of the one hit and in reach (not an ally); attacked through dnd5e, once per turn", async () => {
+  const fighter = creature("Fighter", 0, 0, { disposition: 1 });
+  const orc = creature("Orc", 1, 0);
+  const kobold = creature("Kobold", 1, 1);                         // next to the orc, and in the fighter's reach
+  creature("Goblin", 2, 0);                                        // next to the orc, out of the fighter's reach
+  creature("Ally", 0, 1, { disposition: 1 });                      // in reach, but the fighter's ally
+  assert.deepEqual(cleaveCandidates(fighter.doc, [orc.doc], 5).map(d => d.name), ["Kobold"]);
+  assert.deepEqual(cleaveCandidates(fighter.doc, [orc.doc], 10).map(d => d.name).sort(), ["Goblin", "Kobold"]);
+
+  const attacks = [];
+  const activity = { ...weaponAttack(fighter), attack: { type: { value: "melee" } },
+    async rollAttack(config, dialog, message) { attacks.push({ config, message, targets: [...game.user.targets].map(t => t.id) }); return [{ parent: { id: "cleave1" } }]; } };
+  game.user.targets = new Set([orc.token]);
+  let offered = null;
+  prompts.choice = async (_title, _content, buttons) => { offered = buttons.map(b => b.label); return kobold.token.id; };
+  game.combat = { started: true, id: "c", round: 1, turn: 0 };
+  try {
+    const message = card("cleave", { hits: [orc] });
+    message.system.mode = "twoHanded";
+    await applyWeaponMastery(message, activity);
+    assert.deepEqual(offered, ["Kobold", "No"]);
+    assert.equal(attacks.length, 1);
+    assert.deepEqual(attacks[0].targets, [kobold.token.id]);
+    assert.equal(attacks[0].config.attackMode, "twoHanded");
+    assert.equal(attacks[0].message.data.flavor, "Maul - Cleave");
+    assert.equal(attacks[0].message.data.flags[MODULE_ID][CLEAVE_FLAG], true);
+    assert.deepEqual([...game.user.targets].map(t => t.id), [orc.token.id]);   // targets put back
+    assert.match(message.flags[MASTERY_RESULT_FLAG].text, /Cleave attack at Kobold/);
+
+    // Once per turn: not offered again this turn; the next turn, it is.
+    offered = null;
+    await applyWeaponMastery(card("cleave", { hits: [orc] }), activity);
+    assert.equal(offered, null);
+    game.combat.turn = 1;
+    await applyWeaponMastery(card("cleave", { hits: [orc] }), activity);
+    assert.deepEqual(offered, ["Kobold", "No"]);
+
+    // The Cleave attack's own card doesn't Cleave again; nor does a thrown or ranged attack.
+    game.combat.turn = 2; offered = null;
+    const own = card("cleave", { hits: [kobold] }); own.flags[CLEAVE_FLAG] = true;
+    await applyWeaponMastery(own, activity);
+    const thrown = card("cleave", { hits: [orc] }); thrown.system.mode = "thrownOneHanded";
+    await applyWeaponMastery(thrown, activity);
+    assert.equal(offered, null);
+  } finally {
+    game.combat = null;
+  }
+});
+
+test("Cleave's damage leaves out the ability modifier, unless it's negative; other damage is untouched", () => {
+  const roll = (mod) => ({ base: true, parts: ["1d12", "@mod"], data: { mod } });
+  const cleaving = (mod) => ({ [MODULE_ID]: { [CLEAVE_FLAG]: true }, rolls: [roll(mod)] });
+  let config = cleaving(3); onPreRollDamageCleave(config);
+  assert.deepEqual(config.rolls[0].parts, ["1d12"]);
+  config = cleaving(-1); onPreRollDamageCleave(config);
+  assert.deepEqual(config.rolls[0].parts, ["1d12", "@mod"]);
+  config = { rolls: [roll(3)] }; onPreRollDamageCleave(config);
+  assert.deepEqual(config.rolls[0].parts, ["1d12", "@mod"]);
 });
 
 test("no mastery, the setting off, or a miss for hit-only masteries: nothing happens", async () => {

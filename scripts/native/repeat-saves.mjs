@@ -13,7 +13,7 @@
 // spells give when the creature takes damage.
 
 import { requestSaves, saveOf } from "./saves.mjs";
-import { MODULE_ID, debug, getSaveAutomation, isRepeatSavesEnabled, activePlayerOwner } from "./shared.mjs";
+import { MODULE_ID, debug, getSaveAutomation, isRepeatSavesEnabled, activePlayerOwner, inAntimagic } from "./shared.mjs";
 import { isTriggerClient } from "./lingering.mjs";
 
 export const REPEAT_FLAG = "repeatSave";
@@ -63,6 +63,8 @@ export async function onTurnEndRepeatSaves(combat, prior) {
   const mode = getSaveAutomation();
   const tokenDoc = (combat.scene ?? canvas.scene)?.tokens?.get?.(prior.tokenId);
   const actor = tokenDoc?.actor;
+  // Antimagic (dnd5e 6.1+): every one of these spells is suppressed on it, not ended — nothing to save against.
+  if (inAntimagic(actor)) return;
   const effects = repeatEffects(actor);
   if (!effects.length) return;
 

@@ -4,21 +4,21 @@
 import { requestApplyDamage } from "./apply.mjs";
 import { clearAreasForUse } from "./areas.mjs";
 import { projectileCount, assignProjectiles } from "./projectiles.mjs";
-import { MODULE_ID, debug, isHealingAutomationEnabled, isDamageOnlyAutomationEnabled, pendingLuckDamage } from "./shared.mjs";
+import { MODULE_ID, debug, isHealingAutomationEnabled, isDamageOnlyAutomationEnabled, pendingLuckDamage, isLike } from "./shared.mjs";
 import { tokensInActivityArea, regionsOf, confirmTargets } from "./targeting.mjs";
 
 // ── Healing automation ────────────────────────────────────────────────────────
 // The "healingAutomation" setting. dnd5e rolls a healing activity's healing
 // itself, right after use, and records the user's targets on the healing card at
-// that moment — so the module only applies it (through the same GM damage path:
-// healing types count as negative damage, temp HP is dnd5e's). For a placed area,
+// that moment — so the module only applies it (through the same GM damage path,
+// where dnd5e turns healing types into healing and temp HP). For a placed area,
 // the creatures inside are targeted during the use hook, synchronously, before
 // dnd5e's roll reads the targets.
 
 /** Whether this auto-rolled activity type is set to be applied. */
 export function autoRolledEnabled(activity) {
-  if (activity?.type === "heal")   return isHealingAutomationEnabled();
-  if (activity?.type === "damage") return isDamageOnlyAutomationEnabled();
+  if (isLike(activity, "heal"))   return isHealingAutomationEnabled();
+  if (isLike(activity, "damage")) return isDamageOnlyAutomationEnabled();
   return false;
 }
 
@@ -44,7 +44,7 @@ export async function applyAutoRolledCard(message, activity) {
   if (!autoRolledEnabled(activity) || !message) return;
   // Damage-only activities get the Luck Dice damage prompt (no attack card to
   // gate it); apply only once any dice are on the card.
-  if (activity.type === "damage") await pendingLuckDamage.get(message.id);
+  if (isLike(activity, "damage")) await pendingLuckDamage.get(message.id);
   let targets = (message.system?.targets ?? []).map(({ actor, token, name }) => ({ actor, token, name }));
   if (!targets.length && activity?.target?.affects?.type === "self") {
     const user = activity.getUsageToken?.();
@@ -84,7 +84,7 @@ export function applyConsumedFlag(activity, results) {
  * the confirmed targets, and the usual automation applies it.
  */
 export async function confirmAndRoll(activity, usageConfig, results) {
-  if (activity?.type === "attack") return confirmAndAttack(activity, usageConfig, results);
+  if (isLike(activity, "attack")) return confirmAndAttack(activity, usageConfig, results);
   const regions = regionsOf(results);
   if (regions.length && canvas.scene === regions[0].parent) {
     canvas.tokens?.setTargets(tokensInActivityArea(activity, regions).map(t => t.id), { mode: "replace" });
@@ -107,6 +107,6 @@ async function confirmAndAttack(activity, usageConfig, results) {
  */
 export function skipAutoRolledDamageDialog(config, dialog) {
   const activity = config?.subject;
-  if (!dialog || !(activity?.type === "heal" || activity?.type === "damage") || !autoRolledEnabled(activity)) return;
+  if (!dialog || !(isLike(activity, "heal") || isLike(activity, "damage")) || !autoRolledEnabled(activity)) return;
   dialog.configure ??= false;
 }

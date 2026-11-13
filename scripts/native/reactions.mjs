@@ -21,8 +21,10 @@
 //                         at the attacker (the save automation takes it from there).
 // Each is used through dnd5e (spending its slot or uses; effects such as Shield's
 // +5 AC go on the creature), on its owner's client — its active player, else the
-// primary GM. A creature has one reaction until its next turn starts. Unanswered
-// prompts time out as "no reaction".
+// primary GM. A creature has one reaction until its next turn starts, tracked in
+// combat by a "Reaction Used" status on it: every client sees it, it survives a
+// reload, and the GM can toggle it on the token HUD. Unanswered prompts time out
+// as "no reaction".
 //
 // Also offered to the creature hit, under the "rollBoosts" setting rather than this one
 // (boosts.mjs), and without using its reaction: the Lucky feat — the attacker rolls another
@@ -33,15 +35,16 @@
 // Incapacitated, speed 0 and vulnerable to fire until the end of its next turn).
 
 import { requestApplyEffects } from "./effects.mjs";
-import { tokenDistance, hasLineOfSight } from "./advantage.mjs";
+import { tokenDistance, hasLineOfSight, cantTakeReactions } from "./advantage.mjs";
 import { bardicDie, luckyFeat, usesLeft, useLuckyAgainst, withExtraD20, spendUses } from "./boosts.mjs";
 import { answerGift, dealInvocationDamage } from "./invocations.mjs";
 import { applyMasteryChange, pushDestination } from "./mastery.mjs";
+import { isTriggerClient } from "./lingering.mjs";
 import { answerOpportunity } from "./opportunity.mjs";
 import { answerWallSide } from "./walls.mjs";
 import {
   LDA, MODULE_ID, escapeHTML, promptChoice, getReactionPrompts, socket, getPrimaryGM, activePlayerOwner,
-  resolveTarget, combineRolls, isRollBoostsEnabled, getKeptD20Result, isInvocationsEnabled
+  resolveTarget, combineRolls, isRollBoostsEnabled, getKeptD20Result, isInvocationsEnabled, antimagicStops, hasStockEffect, isLike
 } from "./shared.mjs";
 
 export const REACTIONS_FLAG = "reactions";
@@ -127,6 +130,7 @@ export function reactionOptions(actor, context, when = "hit", { ally = false, re
     if (reaction.setting && !reaction.setting()) continue;
     const item = reactionItem(actor, identifier);
     if (!item || !reaction.useful({ ...context, actor })) continue;
+    if (antimagicStops(actor, item)) continue; // dnd5e 6.1+: no spell or Magical feature in antimagic
     if (reaction.manual && item.system?.uses?.max && usesLeft(item) <= 0) continue;
     if (item.type === "spell" && (item.system?.level ?? 0) > 0 && !hasSpellSlot(actor)) continue;
     options.push(identifier);
@@ -136,15 +140,42 @@ export function reactionOptions(actor, context, when = "hit", { ally = false, re
 
 // ── Responder side: who has used their reaction ───────────────────────────────
 
-// Creatures whose reaction is spent, by actor uuid; cleared when their turn starts.
-const reactionUsed = new Set();
-export const hasReaction = (actor) => !!actor && !reactionUsed.has(actor.uuid);
-export const spendReaction = (actor) => { if (actor) reactionUsed.add(actor.uuid); };
+export const REACTION_USED = "reacted";
 
-/** combatTurnChange: the creature whose turn starts has its reaction back. */
-export function onTurnStartReaction(combat, current) {
-  const actor = (combat?.scene ?? canvas.scene)?.tokens?.get?.(current?.tokenId)?.actor;
-  if (actor) reactionUsed.delete(actor.uuid);
+// The status, added to dnd5e's own list before dnd5e builds CONFIG.statusEffects (i18nInit).
+Hooks.once("init", () => {
+  if (!globalThis.CONFIG?.DND5E?.statusEffects) return;
+  CONFIG.DND5E.statusEffects[REACTION_USED] ??= { name: "Reaction Used", img: "icons/svg/lightning.svg", order: 51 };
+});
+
+// Creatures whose reaction is being spent on this client, until the status lands (by actor uuid).
+const spending = new Set();
+// dnd5e 6.1's stock No Reactions effect (shared.mjs) takes it away too, as does a 2014 Shocking Grasp (advantage.mjs).
+export const hasReaction = (actor) => !!actor && !actor.statuses?.has?.(REACTION_USED) && !spending.has(actor.uuid)
+  && !hasStockEffect(actor, "noReactions") && !cantTakeReactions(actor);
+
+/** A creature uses its reaction: the status, on its owner's client. Outside combat there are no turns to track it by. */
+export async function spendReaction(actor) {
+  if (!actor || !game.combat?.started) return;
+  spending.add(actor.uuid);
+  try { await actor.toggleStatusEffect?.(REACTION_USED, { active: true }); }
+  finally { spending.delete(actor.uuid); }
+}
+
+const reactionBack = async (actor) => {
+  if (actor?.statuses?.has?.(REACTION_USED)) await actor.toggleStatusEffect?.(REACTION_USED, { active: false });
+};
+
+/** combatTurnChange (primary GM): the creature whose turn starts has its reaction back. */
+export async function onTurnStartReaction(combat, current) {
+  if (!isTriggerClient()) return;
+  await reactionBack((combat?.scene ?? canvas.scene)?.tokens?.get?.(current?.tokenId)?.actor);
+}
+
+/** deleteCombat (primary GM): everyone in it has their reaction back. */
+export async function onCombatEndedReactions(combat) {
+  if (!isTriggerClient()) return;
+  for (const combatant of combat?.combatants ?? []) await reactionBack(combatant.actor);
 }
 
 /** Use a reaction's item through dnd5e; put the usage's effects (Shield, Defensive Duelist) on the creature. */
@@ -194,6 +225,8 @@ export async function answerReaction(payload) {
     `<p>${what}. ${onlyFree ? `Spend one of ${escapeHTML(name)}'s Luck Points?` : `Use ${escapeHTML(name)}'s reaction?`}</p>`,
     [...available.map(id => ({ action: id, label: REACTIONS[id].label(actor, context) })), { action: "none", label: onlyFree ? "No" : "No Reaction" }]);
   if (!REACTIONS[choice]) return null;
+  // Spent while this prompt was open (another prompt for the same creature)?
+  if (!REACTIONS[choice].free && !hasReaction(actor)) return null;
 
   if (choice === "lucky") {
     const d20 = await useLuckyAgainst(actor);
@@ -205,16 +238,18 @@ export async function answerReaction(payload) {
   if (reaction.manual) {
     // An invocation used here: its uses (if it has any) and the reaction.
     if (item.system?.uses?.max) await spendUses(item, 1);
-    spendReaction(actor);
+    await spendReaction(actor);
     const result = { identifier: choice, label: reaction.label(actor, context), by: name };
     if (choice === "rebuke-of-the-talisman") result.rebuke = prof(actor);
     if (choice === "tomb-of-levistus") result.tempHP = tombHP(actor);
     return result;
   }
   const aim = attackerToken ? await fromUuid(attackerToken) : null;
-  const used = await useReaction(item, actor, tokenDoc, { aim: choice === "hellish-rebuke" ? aim : null });
+  spending.add(actor.uuid); // while dnd5e's window for it is open
+  const used = await useReaction(item, actor, tokenDoc, { aim: choice === "hellish-rebuke" ? aim : null })
+    .finally(() => spending.delete(actor.uuid));
   if (!used) return null;
-  spendReaction(actor);
+  await spendReaction(actor);
 
   const result = { identifier: choice, label: reaction.label(actor, context), by: name };
   if (reaction.acBonus) result.acBonus = reaction.acBonus(actor);
@@ -238,7 +273,7 @@ export async function answerReaction(payload) {
 export const pendingReactions = new Map();
 
 /** Ask whoever answers for this creature; resolves with their answer or null (timeout, nobody). */
-export function askReaction(actor, payload) {
+export function askReaction(actor, payload, { timeout: wait = RESPONSE_TIMEOUT } = {}) {
   const player = activePlayerOwner(actor);
   const gm = getPrimaryGM() ?? (game.user.isGM ? game.user : null);
   const responder = player ?? gm;
@@ -247,7 +282,7 @@ export function askReaction(actor, payload) {
   if (!socket) return Promise.resolve(null);
   const requestId = foundry.utils.randomID();
   return new Promise((resolve) => {
-    const timeout = setTimeout(() => { pendingReactions.delete(requestId); resolve(null); }, RESPONSE_TIMEOUT);
+    const timeout = setTimeout(() => { pendingReactions.delete(requestId); resolve(null); }, wait);
     pendingReactions.set(requestId, (result) => { clearTimeout(timeout); pendingReactions.delete(requestId); resolve(result ?? null); });
     const message = { ...payload, requestId, from: game.user.id };
     if (player) socket.emit("offerReaction", { ...message, to: player.id });
@@ -361,7 +396,8 @@ export const tombEffect = () => ({
   name: "Tomb of Levistus", img: "icons/svg/frozen.svg", type: "base", transfer: false, disabled: false,
   statuses: ["incapacitated"],
   duration: { value: 1, units: "rounds", expiry: "turnEnd" },
-  system: { changes: [
+  // Magical: dnd5e 6.1+ suppresses it in antimagic (earlier versions ignore the field).
+  system: { magical: true, changes: [
     { key: "system.traits.dv.value", type: "add", value: "fire" },
     { key: "system.attributes.movement.speeds.walk", type: "override", value: 0 }
   ] },
@@ -379,7 +415,7 @@ export function reactionMultiplier(attackMessage, tokenUuid) {
 function damageSource(message) {
   const activity = message?.getAssociatedActivity?.() ?? null;
   const mode = String(message?.rolls?.[0]?.options?.attackMode ?? "");
-  const melee = activity?.type === "attack" && activity.attack?.type?.value === "melee" && !mode.startsWith("thrown");
+  const melee = isLike(activity, "attack") && activity.attack?.type?.value === "melee" && !mode.startsWith("thrown");
   const attackerDoc = tokenOf(activity?.getUsageToken?.() ?? message?.speakerActor?.getActiveTokens?.()?.[0]);
   return { activity, melee, attackerDoc, attackerName: attackerDoc?.name ?? message?.speakerActor?.name ?? activity?.actor?.name };
 }
@@ -391,9 +427,10 @@ function damageSource(message) {
 export async function damageReactions(message, target, damages) {
   const mode = getReactionPrompts();
   const { actor, tokenDoc } = await resolveTarget(target);
-  if (!asksFor(actor, mode) || damages.every(d => d.value <= 0)) return { damages, notes: [] };
+  const harmful = damages.filter(d => d.value > 0 && !(d.type in CONFIG.DND5E.healingTypes));
+  if (!asksFor(actor, mode) || !harmful.length) return { damages, notes: [] };
   const { melee, attackerName } = damageSource(message);
-  const types = [...new Set(damages.filter(d => d.value > 0).map(d => d.type).filter(Boolean))];
+  const types = [...new Set(harmful.map(d => d.type).filter(Boolean))];
   const options = reactionOptions(actor, { types, melee }, "damage");
   if (!options.length) return { damages, notes: [] };
   const answer = await askReaction(actor, { token: tokenDoc?.uuid ?? target.token, actor: actor.uuid, options, when: "damage", types, attackerName });

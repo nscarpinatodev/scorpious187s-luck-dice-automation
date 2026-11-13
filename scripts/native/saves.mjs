@@ -6,7 +6,7 @@ import { applySaveEffects } from "./effects.mjs";
 import { clearAreasForUse } from "./areas.mjs";
 import { evasionApplies } from "./save-rules.mjs";
 import { chooseSaveMetamagic } from "./metamagic.mjs";
-import { MODULE_ID, debug, promptChoice, getSaveAutomation, escapeHTML, pendingLuckDamage, socket, pendingLuckChecks, pendingSaveRequests, getPrimaryGM, activePlayerOwner, abilityLabel, resolveTarget, NO_DIALOG } from "./shared.mjs";
+import { MODULE_ID, debug, promptChoice, getSaveAutomation, escapeHTML, pendingLuckDamage, socket, pendingLuckChecks, pendingSaveRequests, getPrimaryGM, activePlayerOwner, abilityLabel, resolveTarget, NO_DIALOG, antimagicStops, isLike } from "./shared.mjs";
 import { tokensInActivityArea, chooseAffected, regionsOf, needsConfirmation, confirmTargets } from "./targeting.mjs";
 
 // ── Save automation ───────────────────────────────────────────────────────────
@@ -168,7 +168,7 @@ export async function resolveSaveTargets(activity, results) {
 /** dnd5e.postUseActivity — automate a save activity's saves, and damage in full mode. */
 export async function onActivityUsed(activity, usageConfig, results) {
   try {
-    if (activity?.type !== "save") return;
+    if (!isLike(activity, "save")) return;
     const mode  = getSaveAutomation();
     const usage = results?.message;
     if (mode === "off" || !usage) return;
@@ -211,6 +211,15 @@ export async function automateSaves(activity, targets, usage, mode = getSaveAuto
     .map(t => ({ token: t.token, result: { passed: true, total: null, careful: true, carefulRules: metamagic?.rules } }));
   const everyone = targets;
   targets = targets.filter(t => !careful.has(t.token)).map(t => t.token === heightened ? { ...t, heightened: true } : t);
+  // Antimagic (dnd5e 6.1+): a spell or Magical feature doesn't reach a creature in it — nothing to save
+  // against. Its damage and effects are left off too (apply.mjs, effects.mjs).
+  const shielded = new Set();
+  for (const t of targets) if (antimagicStops((await resolveTarget(t)).actor, activity)) shielded.add(t.token);
+  if (shielded.size) {
+    protectedOutcomes.push(...[...shielded].map(token => ({ token, result: { passed: true, total: null, antimagic: true } })));
+    targets = targets.filter(t => !shielded.has(t.token));
+    debug(`save automation: in antimagic, no save: ${everyone.filter(t => shielded.has(t.token)).map(t => t.name).join(", ")}`);
+  }
 
   // Group targets by who rolls them: an active player owner, else the GM (null).
   const groups = new Map();

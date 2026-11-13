@@ -107,6 +107,18 @@ test("the caster isn't hit by their own emanation; allies aren't where the caste
   assert.equal(await triggerArea(r, scene.tokens.find(t => t.id === "foe"), "enter"), true);
 });
 
+test("dnd5e 6.1 antimagic: a spell's area doesn't trigger on a creature in it", async () => {
+  const s = spell();
+  s.item.type = "spell";
+  makeToken("warded", "Warded", { disposition: -1 });
+  makeToken("open", "Open", { disposition: -1 });
+  const warded = scene.tokens.find(t => t.id === "warded"), open = scene.tokens.find(t => t.id === "open");
+  warded.actor.statuses = new Set(["antimagic"]);
+  const r = tagged(s, ["warded", "open"]);
+  assert.equal(await triggerArea(r, warded, "enter"), false);
+  assert.equal(await triggerArea(r, open, "enter"), true);
+});
+
 test("an area whose concentration ended doesn't trigger", async () => {
   const s = spell();
   const goblin = makeToken("g", "Goblin").document;

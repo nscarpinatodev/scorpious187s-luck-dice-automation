@@ -241,7 +241,7 @@ export function renderAppliedSection(applied) {
   const canUndo   = game.user.isGM && applied.some(undoable);
   const perTarget = canUndo && applied.length > 1;
   const parts = applied.map((a, i) =>
-    `<span style="white-space:nowrap"><span style="${a.undone ? "text-decoration:line-through;opacity:0.55" : ""}">${escapeHTML(a.name)} <strong>${a.amount < 0 ? `+${-a.amount}` : a.amount}</strong>${a.hits > 1 || a.luck ? ` <span style="opacity:0.7">(${[a.hits > 1 ? `×${a.hits}` : "", a.luck ? "Luck Dice on one" : ""].filter(Boolean).join(", ")})</span>` : ""}${a.saved ? ` <span style="opacity:0.7">(saved)</span>` : ""}${a.reactions?.length ? ` <span style="opacity:0.7">(${a.reactions.map(escapeHTML).join(", ")})</span>` : ""}</span>${
+    `<span style="white-space:nowrap"><span style="${a.undone ? "text-decoration:line-through;opacity:0.55" : ""}">${escapeHTML(a.name)} <strong>${a.amount < 0 ? `+${-a.amount}` : (!a.amount && a.temp > 0) ? `+${a.temp} temp` : a.amount}</strong>${a.hits > 1 || a.luck ? ` <span style="opacity:0.7">(${[a.hits > 1 ? `×${a.hits}` : "", a.luck ? "Luck Dice on one" : ""].filter(Boolean).join(", ")})</span>` : ""}${a.saved ? ` <span style="opacity:0.7">(saved)</span>` : ""}${a.reactions?.length ? ` <span style="opacity:0.7">(${a.reactions.map(escapeHTML).join(", ")})</span>` : ""}</span>${
       perTarget && undoable(a) ? undoButton(`Give back ${a.name}'s HP / temp HP only. ${UNDO_NOTE}`, { index: i }) : ""}</span>`);
   const wrapper = document.createElement("div");
   wrapper.innerHTML = `

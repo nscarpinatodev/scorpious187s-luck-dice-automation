@@ -2,7 +2,7 @@
 // Projectile spells: Magic Missile's darts, Scorching Ray's rays, Eldritch Blast's beams.
 
 import { applyConsumedFlag } from "./autoroll.mjs";
-import { debug, isRayAutomationEnabled, escapeHTML, pendingAttacks } from "./shared.mjs";
+import { debug, isRayAutomationEnabled, escapeHTML, pendingAttacks, isLike } from "./shared.mjs";
 import { confirmTargets } from "./targeting.mjs";
 
 // ── Projectile spells ─────────────────────────────────────────────────────────
@@ -26,7 +26,7 @@ export const PROJECTILE_SPELLS = {
 /** How many projectiles this use fires, or null for an activity that isn't one. */
 export function projectileCount(activity, usage) {
   const spell = PROJECTILE_SPELLS[activity?.item?.system?.identifier];
-  if (!spell || spell.type !== activity.type) return null;
+  if (!spell || !isLike(activity, spell.type)) return null;
   const scaling = Number(usage?.system?.scaling) || Number(activity.item.scalingIncrease) || 0;
   return { ...spell, count: spell.base + spell.perLevel * Math.max(0, scaling) };
 }
@@ -103,7 +103,7 @@ export async function assignProjectiles(activity, targets, { count, noun }, deta
 
 /** A ray / beam spell's projectiles when the ray setting is on and it fires more than one. */
 export function rayCount(activity, usage) {
-  if (!isRayAutomationEnabled() || activity?.type !== "attack") return null;
+  if (!isRayAutomationEnabled() || !isLike(activity, "attack")) return null;
   const rays = projectileCount(activity, usage);
   return rays?.count > 1 ? rays : null;
 }

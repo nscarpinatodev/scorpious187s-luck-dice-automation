@@ -19,7 +19,7 @@
 
 import { requestApplyDamage } from "./apply.mjs";
 import { automateSaves } from "./saves.mjs";
-import { MODULE_ID, debug, getSaveAutomation, getPrimaryGM, isLingeringAreasEnabled, pendingLuckDamage, socket, NO_DIALOG } from "./shared.mjs";
+import { MODULE_ID, debug, getSaveAutomation, getPrimaryGM, isLingeringAreasEnabled, pendingLuckDamage, socket, NO_DIALOG, antimagicStops, isLike } from "./shared.mjs";
 import { regionsOf } from "./targeting.mjs";
 
 export const LINGERING_FLAG = "lingering";
@@ -42,7 +42,7 @@ export function rulesOf(item) {
  * several, the one with no activation of its own (2024 data, e.g. Wall of Thorns' Traversal Save); else the first.
  */
 export function triggerActivity(item) {
-  const activities = [...(item?.system?.activities?.values?.() ?? [])].filter(a => a.type === "save" || a.type === "damage");
+  const activities = [...(item?.system?.activities?.values?.() ?? [])].filter(a => isLike(a, "save") || isLike(a, "damage"));
   return activities.find(a => a.activation?.type === "special")
     ?? (activities.length > 1 ? activities.find(a => !a.activation?.type) : null)
     ?? activities[0] ?? null;
@@ -128,6 +128,8 @@ function affects(activity, tokenDoc) {
   const type = activity.target?.affects?.type;
   if (type === "self") return !!caster && caster.id === tokenDoc.id;
   if (tokenDoc.actor?.statuses?.has?.("dead")) return false;
+  // Antimagic (dnd5e 6.1+): a spell's area doesn't reach a creature in it.
+  if (antimagicStops(tokenDoc.actor, activity)) return false;
   if (!caster) return true;
   if (tokenDoc.id === caster.id && activity.range?.units === "self") return false;
   if (type === "enemy" && tokenDoc.disposition === caster.disposition) return false;
@@ -172,7 +174,7 @@ async function runAreaTrigger(activity, tokenDoc, usage) {
   const mode = getSaveAutomation();
   if (mode === "off") return;
   const target = { actor: tokenDoc.actor.uuid, token: tokenDoc.uuid, name: tokenDoc.name };
-  if (activity.type === "save") return automateSaves(activity, [target], usage, mode);
+  if (isLike(activity, "save")) return automateSaves(activity, [target], usage, mode);
   // A damage-only area: roll it at the creature; apply it in full mode.
   const rolls = await activity.rollDamage({ ...NO_DIALOG }, { configure: false }, {
     data: { system: { targets: [{ ...target, ac: tokenDoc.actor.system?.attributes?.ac?.value ?? null, img: tokenDoc.texture?.src }] } }

@@ -141,6 +141,73 @@ test("Sneak Attack once per turn in combat", async () => {
   assert.deepEqual(names(await eligibleRiders(atk, attackCard([target("g")]))), ["sneak-attack"]);
 });
 
+test("2024 Sneak Attack (dnd5e 6.1, one use a turn): rolled without dnd5e's use, its use marked spent", async () => {
+  const sneakAct = damageActivity("Sneak", 10);
+  sneakAct.consumption.targets = [{ type: "activityUses", value: "1" }];
+  sneakAct.uses = { max: 1, spent: 0, value: 1 };
+  sneakAct.update = async (u) => { sneakAct.uses.spent = u["uses.spent"]; sneakAct.uses.value = sneakAct.uses.max - sneakAct.uses.spent; };
+  const sneak = riderItem("Actor.rogue", "sneak-attack", [sneakAct]);
+  const rogue = attacker([sneak]);
+  const [choice] = await eligibleRiders(weaponAttack(rogue, { finesse: true }), attackCard([target("g")]));
+  assert.equal(spendsSomething(choice), false);
+  dialogs.push(async (ui) => { assert.doesNotMatch(ui.config.content, /spends a resource/); return "ok"; });
+  await addOnHitRiders(damageCard(), weaponAttack(rogue, { finesse: true }), attackCard([target("g")]));
+  assert.equal(sneakAct.used, undefined);                    // no usage window or card
+  assert.equal(sneakAct.rolled.length, 1);
+  assert.equal(sneakAct.uses.spent, 1);
+
+  // Out of combat the module doesn't limit it, and a spent use doesn't block it either.
+  dialogs.push(async () => "ok");
+  await addOnHitRiders(damageCard(), weaponAttack(rogue, { finesse: true }), attackCard([target("g")]));
+  assert.equal(sneakAct.rolled.length, 2);
+  assert.equal(sneakAct.uses.spent, 1);
+
+  // Other limited-use riders still go through dnd5e.
+  const limited = { ...choice, oncePerTurn: false };
+  assert.equal(spendsSomething(limited), true);
+});
+
+test("2024 Sneak Attack (dnd5e 6.1.0 release): its item's use, spent the same way; another item's isn't", async () => {
+  const sneakAct = damageActivity("Sneak", 10);
+  sneakAct.consumption.targets = [{ type: "itemUses", value: "1", target: "" }];
+  const sneak = riderItem("Actor.rogue", "sneak-attack", [sneakAct]);
+  sneak.system.uses = { max: 1, spent: 0, value: 1 };
+  sneak.update = async (u) => { sneak.system.uses.spent = u["system.uses.spent"]; sneak.system.uses.value = 1 - sneak.system.uses.spent; };
+  const rogue = attacker([sneak]);
+  const [choice] = await eligibleRiders(weaponAttack(rogue, { finesse: true }), attackCard([target("g")]));
+  assert.equal(spendsSomething(choice), false);
+  dialogs.push(async () => "ok");
+  await addOnHitRiders(damageCard(), weaponAttack(rogue, { finesse: true }), attackCard([target("g")]));
+  assert.equal(sneakAct.used, undefined);
+  assert.equal(sneakAct.rolled.length, 1);
+  assert.equal(sneak.system.uses.spent, 1);
+
+  // Its own item named by id counts too; another item's uses go through dnd5e.
+  sneakAct.consumption.targets = [{ type: "itemUses", value: "1", target: sneak.id }];
+  assert.equal(spendsSomething(choice), false);
+  sneakAct.consumption.targets = [{ type: "itemUses", value: "1", target: "some-other-item" }];
+  assert.equal(spendsSomething(choice), true);
+});
+
+test("Dice So Nice 6 animates dice added to a card itself: they aren't shown a second time; earlier versions still get them shown", async () => {
+  const shown = [], waited = [];
+  const roll = () => {
+    const sneak = riderItem("Actor.rogue", "sneak-attack", [damageActivity("Sneak", 10)]);
+    const rogue = attacker([sneak]);
+    dialogs.push(async () => "ok");
+    return addOnHitRiders(Object.assign(damageCard(), { id: "card" }), weaponAttack(rogue, { finesse: true }), attackCard([target("g")]));
+  };
+  game.dice3d = { pipeline: { messageUpdateHideSelector: ".dice-roll" }, showForRoll: async (r) => { shown.push(r); }, waitFor3DAnimationByMessageID: async (id) => { waited.push(id); } };
+  try {
+    await roll();
+    assert.equal(shown.length, 0);
+    assert.deepEqual(waited, ["card"]);
+    game.dice3d = { showForRoll: async (r) => { shown.push(r); } };
+    await roll();
+    assert.equal(shown.length, 1);
+  } finally { game.dice3d = null; }
+});
+
 test("a rider that spends a slot is used through dnd5e; its scaled activity rolls; cancelling adds nothing", async () => {
   const scaled = damageActivity("Cast (3rd level)", 18);
   const cast = damageActivity("Cast", 9);

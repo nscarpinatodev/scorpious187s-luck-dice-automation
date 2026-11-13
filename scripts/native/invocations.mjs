@@ -23,7 +23,7 @@ import { isTriggerClient } from "./lingering.mjs";
 import { applyMasteryChange, masteryEffect, pushDestination, pullDestination, attackerToken } from "./mastery.mjs";
 import { askReaction } from "./reactions.mjs";
 import { pickCreatures } from "./targeting.mjs";
-import { MODULE_ID, debug, escapeHTML, promptChoice, isInvocationsEnabled } from "./shared.mjs";
+import { MODULE_ID, debug, escapeHTML, promptChoice, isInvocationsEnabled, isLike } from "./shared.mjs";
 
 export const INVOCATION_RESULT_FLAG = "invocationResult"; // on the attack card: what the invocations did
 
@@ -81,7 +81,7 @@ export function isPactWeapon(activity, { strict = false } = {}) {
 }
 
 const isMagical = (item) => !!item?.system?.properties?.has?.("mgc") || (Number(item?.system?.magicalBonus) || 0) > 0;
-const improvedPactWeapon = (activity) => isInvocationsEnabled() && activity?.type === "attack" && isPactWeapon(activity, { strict: true })
+const improvedPactWeapon = (activity) => isInvocationsEnabled() && isLike(activity, "attack") && isPactWeapon(activity, { strict: true })
   && !!feature(activity.actor, "improved-pact-weapon") && !isMagical(activity.item);
 
 // ── Once per turn ─────────────────────────────────────────────────────────────
@@ -122,7 +122,7 @@ export function onPreRollDamageInvocations(config) {
 export function eldritchSpearRange(activity) {
   const actor = activity?.actor, item = activity?.item;
   const spear = isInvocationsEnabled() ? feature(actor, "eldritch-spear") : null;
-  if (!spear || activity?.type !== "attack" || !isEldritchBlast(item) || enchantedBy(item, "eldritch-spear", "Eldritch Spear")) return null;
+  if (!spear || !isLike(activity, "attack") || !isEldritchBlast(item) || enchantedBy(item, "eldritch-spear", "Eldritch Spear")) return null;
   const range = activity.range ?? {};
   const mult = conduitMultiplier(item);
   if (rulesOf(spear) === "2014") return { value: 300 * mult, units: "ft" };
@@ -155,7 +155,7 @@ export async function applyInvocationsOnHit(message, activity) {
       const already = [...(targetDoc.actor.effects ?? [])].some(e => e.getFlag?.(MODULE_ID, "mastery")?.kind === "lethargy");
       if (!already) {
         const effect = masteryEffect("lethargy", actor, hit.token, {
-          name: "Lance of Lethargy", img: "icons/svg/clockwork.svg", expiry: "sourceEnd",
+          name: "Lance of Lethargy", img: "icons/svg/clockwork.svg", expiry: "sourceEnd", magical: true,
           changes: [{ key: "system.attributes.movement.speeds.walk", type: "add", value: -10 }]
         });
         await applyMasteryChange({ kind: "lethargy", token: hit.token, actor: hit.actor, effect });
@@ -282,7 +282,7 @@ export function cursedBy(warlock, scene) {
  */
 export function onMaddeningHexUsed(activity, usageConfig, results) {
   if (!isInvocationsEnabled() || activity?.item?.system?.identifier !== "maddening-hex" || !activity.actor?.isOwner) return;
-  if (activity.type === "damage" && usageConfig) usageConfig.subsequentActions = false; // rolled here instead
+  if (isLike(activity, "damage") && usageConfig) usageConfig.subsequentActions = false; // rolled here instead
   maddeningHex(activity, results).catch(err => console.error(`[${MODULE_ID}] maddening hex:`, err));
 }
 

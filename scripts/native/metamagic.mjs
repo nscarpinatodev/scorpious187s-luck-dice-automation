@@ -22,7 +22,7 @@ import { rulesOf, mergeRollMode, ensureFinalModeHook, ac5eCovers, conduitMultipl
 import { usesLeft, spendUses } from "./boosts.mjs";
 import { eldritchSpearRange, feature } from "./invocations.mjs";
 import { confirmTargets, pickCreatures } from "./targeting.mjs";
-import { MODULE_ID, debug, escapeHTML, isMetamagicEnabled, resolveTarget, pendingAttacks } from "./shared.mjs";
+import { MODULE_ID, debug, escapeHTML, isMetamagicEnabled, resolveTarget, pendingAttacks, inAntimagic, isLike } from "./shared.mjs";
 
 export const METAMAGIC_FLAG = "metamagic"; // on a card: { name, cost, notes } — what was used
 
@@ -67,7 +67,7 @@ export async function spendSorceryPoints(actor, count) {
 
 const activitiesOf = (item) => [...(item?.system?.activities?.values?.() ?? [])];
 const damageTypes = (item) => new Set(activitiesOf(item).flatMap(a => (a.damage?.parts ?? []).flatMap(p => [...(p.types ?? [])])));
-const hasSave = (item) => activitiesOf(item).some(a => a.type === "save");
+const hasSave = (item) => activitiesOf(item).some(a => isLike(a, "save"));
 const castLevel = (item, config) => (Number(item?.system?.level) || 0) + (Number(config?.scaling) || 0);
 const lastsAMinute = (item) => {
   const { value, units } = item?.system?.duration ?? {};
@@ -96,6 +96,7 @@ const fits = {
 export function castOptions(activity, config = {}) {
   const actor = activity?.actor, item = activity?.item;
   if (!isMetamagicEnabled() || item?.type !== "spell" || !actor) return null;
+  if (inAntimagic(actor)) return null; // dnd5e 6.1+: no casting there
   const points = sorceryPoints(actor);
   if (points <= 0) return null;
   const options = [];
@@ -199,7 +200,7 @@ export function onMetamagicUsed(activity, usageConfig, results) {
 
   if (key === "distant") adjustCastRange(activity, "distant");
   let twinAttacks = false;
-  if (key === "twinned" && state.rules === "2014" && activity.type === "attack" && usageConfig.subsequentActions !== false) {
+  if (key === "twinned" && state.rules === "2014" && isLike(activity, "attack") && usageConfig.subsequentActions !== false) {
     usageConfig.subsequentActions = false; // an attack at each of the two targets instead
     twinAttacks = true;
   }
@@ -261,7 +262,7 @@ export function castRange(activity, choice) {
  * too. This is the range to give AC5E so its rule comes to that; null when there's nothing to correct.
  */
 export function ac5eSpellSniperRange(activity, value) {
-  if (activity?.type !== "attack" || activity.item?.type !== "spell" || !Number.isFinite(value) || value <= 0) return null;
+  if (!isLike(activity, "attack") || activity.item?.type !== "spell" || !Number.isFinite(value) || value <= 0) return null;
   const sniper = feature(activity.actor, "spell-sniper");
   const covers = ac5eCovers();
   if (!sniper || !(covers.outOfRange || covers.longRange)) return null;
@@ -429,6 +430,7 @@ function damageDice(message) {
 export async function offerEmpowered(message, activity) {
   const actor = activity?.actor;
   if (!isMetamagicEnabled() || activity?.item?.type !== "spell" || !actor?.isOwner || message?.getFlag?.(MODULE_ID, "empowered")) return;
+  if (inAntimagic(actor)) return; // dnd5e 6.1+: no casting there
   const empowered = feature(actor, "empowered-spell");
   const cost = empowered ? metamagicCost("empowered", empowered) : Infinity;
   if (!empowered || sorceryPoints(actor) < cost) return;

@@ -17,8 +17,8 @@ const item = (identifier) => ({ name: identifier, system: { identifier }, scalin
 test("ready registers native mode's hooks", () => {
   for (const name of ["renderChatMessageHTML", "dnd5e.renderChatMessage", "dnd5e.rollDamageV2",
     "dnd5e.rollSavingThrow", "dnd5e.rollConcentrationV2", "dnd5e.rollAbilityCheck", "dnd5e.rollSkillV2",
-    "dnd5e.rollToolCheckV2", "dnd5e.postUseActivity", "createChatMessage", "moveToken", "updateRegion",
-    "createActiveEffect"]) {
+    "dnd5e.rollToolCheckV2", "dnd5e.postUseActivity", "createChatMessage", "preMoveToken", "moveToken", "updateRegion",
+    "createActiveEffect", "deleteCombat"]) {
     assert.equal(hooks.count(name), 1, name);
   }
   assert.equal(hooks.count("combatTurnChange"), 4);                  // reactions back; disengage + summary + death saves; lingering + repeat saves; Cloak of Flies

@@ -126,58 +126,36 @@ async function showSkillCheckLauncher() {
     </div>`;
 
   function readFormValues(root) {
-    // DialogV2 in Foundry v13 passes the Application instance, not a DOM element.
-    // Normalise: if root has a .element property, use that; legacy jQuery objects have .find().
+    // DialogV2 passes the Application instance, not a DOM element: use its element.
     const el = (root instanceof Element) ? root
              : (root?.element instanceof Element) ? root.element
              : root;
-    const q = (id) => el.querySelector?.(id) ?? el.find?.(id)?.[0];
+    const q = (id) => el.querySelector?.(id);
     const checkEl  = q("#sck-check");
     const dcEl     = q("#sck-dc");
     const showDcEl = q("#sck-show-dc");
-    const actorIds    = [...(el.querySelectorAll?.('input[name="sck-actor"]:checked') ?? el.find?.('input[name="sck-actor"]:checked') ?? [])].map(cb => cb.value);
+    const actorIds    = [...(el.querySelectorAll?.('input[name="sck-actor"]:checked') ?? [])].map(cb => cb.value);
     const check       = checkEl?.value ?? "";
     const dc          = Number(dcEl?.value ?? 15);
     const showDC      = showDcEl?.checked ?? false;
-    const advRadio    = el.querySelector?.('input[name="sck-adv"]:checked') ?? el.find?.('input[name="sck-adv"]:checked')?.[0];
+    const advRadio    = el.querySelector?.('input[name="sck-adv"]:checked');
     const advantageMode = advRadio?.value ?? "normal";
     return { actorIds, check, dc, showDC, advantageMode };
   }
 
-  if (foundry?.applications?.api?.DialogV2) {
-    await foundry.applications.api.DialogV2.prompt({
-      window: { title: "Request Check or Save", width: 420 },
-      content,
-      ok: {
-        label: "Send Request",
-        callback: (_event, _button, html) => {
-          const { actorIds, check, dc, showDC, advantageMode } = readFormValues(html);
-          if (!actorIds.length) { ui.notifications.warn("Select at least one character."); return; }
-          dispatchCheckRequests(actorIds, check, dc, showDC, advantageMode);
-        }
-      },
-      rejectClose: false
-    });
-    return;
-  }
-
-  // Legacy Dialog fallback.
-  new Dialog({
-    title: "Request Check or Save",
-    content: `<form>${content}</form>`,
-    buttons: {
-      send: {
-        label: "Send Request",
-        callback: (html) => {
-          const { actorIds, check, dc, showDC, advantageMode } = readFormValues(html);
-          if (!actorIds.length) { ui.notifications.warn("Select at least one character."); return; }
-          dispatchCheckRequests(actorIds, check, dc, showDC, advantageMode);
-        }
-      },
-      cancel: { label: "Cancel" }
+  await foundry.applications.api.DialogV2.prompt({
+    window: { title: "Request Check or Save", width: 420 },
+    content,
+    ok: {
+      label: "Send Request",
+      callback: (_event, _button, html) => {
+        const { actorIds, check, dc, showDC, advantageMode } = readFormValues(html);
+        if (!actorIds.length) { ui.notifications.warn("Select at least one character."); return; }
+        dispatchCheckRequests(actorIds, check, dc, showDC, advantageMode);
+      }
     },
-    default: "send"
-  }).render(true);
+    rejectClose: false
+  });
 }
 
 // ── GM summary card ───────────────────────────────────────────────────────────
@@ -338,12 +316,9 @@ async function rollSkillForCheck(actor, checkValue, dc, showDC = false, gmCardId
   // Snapshot existing message IDs so we can identify the card the roll creates.
   const knownMsgIds = new Set(game.messages.map(m => m.id));
 
-  // Build the modern dnd5e (5.x) roll process config from the launcher's
-  // advantage selection. The current roll API takes a config OBJECT first
-  // ({skill}/{ability}) — NOT the legacy (id, options) form — and the roll
-  // configuration dialog is controlled by the SECOND `dialog` argument.
-  // We pass `configure: true` to force the dialog to appear: the legacy
-  // (id, options) call path fast-forwarded it, so players never saw it.
+  // dnd5e's roll process config from the launcher's advantage selection: a
+  // config object first ({skill}/{ability}); the roll configuration dialog is
+  // the second (`dialog`) argument. `configure: true` makes it appear.
   const rollConfig = type === "skill" ? { skill: key } : { ability: key };
   if (advantageMode === "advantage")    rollConfig.advantage = true;
   if (advantageMode === "disadvantage") rollConfig.disadvantage = true;
@@ -356,43 +331,20 @@ async function rollSkillForCheck(actor, checkValue, dc, showDC = false, gmCardId
   // so the card never reaches the players. Passing rollMode explicitly makes
   // the card public regardless of the GM's dropdown; hideCheckCardsFromGM
   // still re-whispers the card to the owning player(s) afterward.
-  const PUBLIC_ROLL_MODE = CONST?.DICE_ROLL_MODES?.PUBLIC ?? "publicroll";
+  // dnd5e hands it to Foundry as a message mode: Foundry 14 names them
+  // (CONFIG.ChatMessage.modes: "public", "gm"…), and the older "publicroll"
+  // there leaves the card whispered.
+  const PUBLIC_ROLL_MODE = CONFIG.ChatMessage?.modes?.public ? "public" : (CONST?.DICE_ROLL_MODES?.PUBLIC ?? "publicroll");
   const messageConfig = { rollMode: PUBLIC_ROLL_MODE };
-
-  // Legacy (pre-5.x) options, only used if a modern method is unavailable.
-  const legacyOpts = advantageMode === "advantage"    ? { advantage: true }
-                   : advantageMode === "disadvantage" ? { disadvantage: true }
-                   : {};
-  legacyOpts.rollMode = PUBLIC_ROLL_MODE;
 
   // This flow runs its own luck prompt below, so mark the actor while it rolls
   // to keep native mode's post-roll hooks from prompting a second time.
   let rollResult = null;
   requestRollActors.add(actor.id);
   try {
-    if (type === "skill") {
-      rollResult = await actor.rollSkill(rollConfig, dialogConfig, messageConfig);
-    } else if (type === "ability") {
-      // Prefer modern rollAbilityCheck; fall back to deprecated rollAbilityTest.
-      if (typeof actor.rollAbilityCheck === "function") {
-        rollResult = await actor.rollAbilityCheck(rollConfig, dialogConfig, messageConfig);
-      } else {
-        rollResult = await actor.rollAbilityTest(key, legacyOpts);
-      }
-    } else if (type === "save") {
-      // Prefer modern rollSavingThrow; fall back to deprecated rollAbilitySave.
-      if (typeof actor.rollSavingThrow === "function") {
-        rollResult = await actor.rollSavingThrow(rollConfig, dialogConfig, messageConfig);
-      } else if (typeof actor.rollAbilitySave === "function") {
-        rollResult = await actor.rollAbilitySave(key, legacyOpts);
-      } else {
-        const available = Object.getOwnPropertyNames(Object.getPrototypeOf(actor))
-          .filter(n => /^roll/i.test(n));
-        console.error(`[${MODULE_ID}] rollSkillForCheck: no saving throw method found on actor "${actor.name}". Available roll methods: [${available.join(", ")}]`);
-        ui.notifications.error("Saving throw roll method not found — check the console (F12) for available methods.");
-        return;
-      }
-    }
+    if (type === "skill")        rollResult = await actor.rollSkill(rollConfig, dialogConfig, messageConfig);
+    else if (type === "ability") rollResult = await actor.rollAbilityCheck(rollConfig, dialogConfig, messageConfig);
+    else if (type === "save")    rollResult = await actor.rollSavingThrow(rollConfig, dialogConfig, messageConfig);
   } catch (e) {
     console.error(`[${MODULE_ID}] rollSkillForCheck: roll error for ${actor.name}:`, e);
     return;
@@ -400,9 +352,8 @@ async function rollSkillForCheck(actor, checkValue, dc, showDC = false, gmCardId
     requestRollActors.delete(actor.id);
   }
 
-  // Modern dnd5e roll methods return an array of rolls (D20Roll[]); legacy
-  // methods return a single roll. Normalise to the first/only D20Roll.
-  const roll = Array.isArray(rollResult) ? rollResult[0] : rollResult;
+  // dnd5e's roll methods return an array of rolls (D20Roll[]).
+  const roll = rollResult?.[0];
   if (!roll) {
     debug(`rollSkillForCheck: roll cancelled for ${actor.name}`);
     return;

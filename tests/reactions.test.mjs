@@ -21,7 +21,8 @@ let seq = 0;
 function defender({ items = [], slots = { spell1: { value: 1 } }, type = "character" } = {}) {
   const token = makeToken(`d${++seq}`, `Defender${seq}`);
   const actor = token.document.actor;
-  Object.assign(actor, { type, isOwner: true, system: { spells: slots }, testUserPermission: () => false, used: [] });
+  Object.assign(actor, { type, isOwner: true, system: { spells: slots }, testUserPermission: () => false, used: [], statuses: new Set(),
+    async toggleStatusEffect(id, { active }) { active ? actor.statuses.add(id) : actor.statuses.delete(id); } });
   actor.items = items.map(identifier => {
     const activity = { effects: identifier === "shield" ? [{}] : [], async use(config) { actor.used.push([identifier, config]); return { message: { id: `use-${identifier}`, system: { getEffects: () => [{}] } } }; } };
     return { name: identifier, type: identifier === "shield" ? "spell" : "feat", system: { identifier, level: identifier === "shield" ? 1 : 0, activities: new Map([["a", activity]]) } };
@@ -94,14 +95,16 @@ test("declining, players-only mode, and one reaction until the creature's turn",
   assert.equal(npc.actor.used.length, 0);
   assert.equal(choices.length, 1);                                  // never asked
 
+  game.combat = { started: true };
   choices = ["uncanny-dodge"];
   const payload = { token: rogue.token.document.uuid, actor: rogue.actor.uuid, options: ["uncanny-dodge"], total: 20, ac: 14 };
   assert.equal((await answerReaction(payload))?.identifier, "uncanny-dodge");
   choices = ["uncanny-dodge"];
   assert.equal(await answerReaction(payload), null);                 // spent
-  onTurnStartReaction({ scene }, { tokenId: rogue.token.id });
+  await onTurnStartReaction({ scene }, { tokenId: rogue.token.id });
   choices = ["uncanny-dodge"];
   assert.equal((await answerReaction(payload))?.identifier, "uncanny-dodge");
+  game.combat = null;
 });
 
 test("the setting off: nobody is asked", async () => {

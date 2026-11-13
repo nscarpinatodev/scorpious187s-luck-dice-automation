@@ -14,18 +14,25 @@
 //   Slow   — on a hit: the target's walking speed drops by 10 ft until the start
 //            of the attacker's next turn (doesn't stack);
 //   Push   — on a hit: the attacker may push a Large or smaller target 10 ft
-//            straight away (stopping at walls).
+//            straight away (stopping at walls);
+//   Cleave — on a melee hit, once per turn: the attacker may attack a second
+//            creature within 5 ft of one it hit and within the weapon's reach (its
+//            allies aren't offered). That attack is rolled through dnd5e like any
+//            other; its damage, when attack automation rolls it, leaves out the
+//            ability modifier unless it's negative. It doesn't Cleave again.
 // Sap and Vex are read by the advantage checks (advantage.mjs) and used up by the
 // next attack. Effects expire through dnd5e's own "source" turn timing. Not
-// automated: Cleave and Nick (they change what the attacker does next).
+// automated: Nick (it changes the attacker's action economy, nothing to roll).
 // Changes to creatures the attacker doesn't own go through the primary GM.
 
 import { requestApplyDamage } from "./apply.mjs";
 import { requestSaves } from "./saves.mjs";
-import { MODULE_ID, debug, escapeHTML, promptChoice, isWeaponMasteryEnabled, getAttackAutomation, socket, activePlayerOwner } from "./shared.mjs";
+import { tokenDistance, levelOf } from "./advantage.mjs";
+import { MODULE_ID, debug, escapeHTML, promptChoice, isWeaponMasteryEnabled, getAttackAutomation, socket, activePlayerOwner, pendingAttacks, isLike } from "./shared.mjs";
 
 export const MASTERY_FLAG = "mastery";          // on a mastery effect: { kind, attacker, target }
 export const MASTERY_RESULT_FLAG = "masteryResult"; // on the attack card: what the mastery did
+export const CLEAVE_FLAG = "cleave";            // on a Cleave attack's card: true
 
 const LABELS = { graze: "Graze", topple: "Topple", sap: "Sap", vex: "Vex", slow: "Slow", push: "Push", cleave: "Cleave", nick: "Nick" };
 const PUSHABLE = new Set(["tiny", "sm", "med", "lg"]);
@@ -49,11 +56,12 @@ function damageType(activity) {
 }
 
 /** The effect data for a mastery effect, timed by dnd5e's "source" turn expiries. */
-export function masteryEffect(kind, attackerActor, target, { name, img, changes = [], expiry }) {
+export function masteryEffect(kind, attackerActor, target, { name, img, changes = [], expiry, magical = false }) {
   return {
     name, img, type: "base", origin: attackerActor.uuid, transfer: false, disabled: false,
     duration: { expiry },
-    system: { changes },
+    // `magical`: dnd5e 6.1+ suppresses it in antimagic (earlier versions ignore the field).
+    system: { changes, ...(magical ? { magical: true } : {}) },
     flags: { [MODULE_ID]: { [MASTERY_FLAG]: { kind, attacker: attackerActor.uuid, target } } }
   };
 }
@@ -180,11 +188,14 @@ export function pushDestination(attackerDoc, targetDoc, feet = 10) {
   const dx = at.x - from.x, dy = at.y - from.y, length = Math.hypot(dx, dy);
   if (!length) return null;
   const backend = CONFIG.Canvas?.polygonBackends?.move;
+  // On the target's own level and at its elevation (Foundry 14 Scene Levels: advantage.mjs).
+  const level = levelOf(targetDoc), elevation = Number(targetDoc.elevation) || 0;
+  const moveTest = { type: "move", mode: "any", ...(level ? { level } : {}) };
   for (let step = feet; step > 0; step -= grid.distance) {
     const pixels = (step / grid.distance) * grid.size;
     const dest = { x: at.x + (dx / length) * pixels, y: at.y + (dy / length) * pixels };
     let blocked = false;
-    try { blocked = !!backend?.testCollision?.(at, dest, { type: "move", mode: "any" }); } catch { blocked = false; }
+    try { blocked = !!backend?.testCollision?.({ ...at, elevation }, { ...dest, elevation }, moveTest); } catch { blocked = false; }
     if (blocked) continue;
     const topLeft = { x: dest.x - (targetDoc.width * grid.size) / 2, y: dest.y - (targetDoc.height * grid.size) / 2 };
     const snapped = grid.getSnappedPoint?.(topLeft, { mode: globalThis.CONST?.GRID_SNAPPING_MODES?.TOP_LEFT_CORNER ?? 16 }) ?? topLeft;
@@ -206,11 +217,14 @@ export function pullDestination(pullerDoc, targetDoc, feet = 10) {
   const room = length - ((pullerDoc.width + targetDoc.width) / 2) * grid.size;
   if (!length || room <= 0) return null;
   const backend = CONFIG.Canvas?.polygonBackends?.move;
+  // On the target's own level and at its elevation (Foundry 14 Scene Levels: advantage.mjs).
+  const level = levelOf(targetDoc), elevation = Number(targetDoc.elevation) || 0;
+  const moveTest = { type: "move", mode: "any", ...(level ? { level } : {}) };
   for (let step = feet; step > 0; step -= grid.distance) {
     const pixels = Math.min((step / grid.distance) * grid.size, room);
     const dest = { x: at.x + (dx / length) * pixels, y: at.y + (dy / length) * pixels };
     let blocked = false;
-    try { blocked = !!backend?.testCollision?.(at, dest, { type: "move", mode: "any" }); } catch { blocked = false; }
+    try { blocked = !!backend?.testCollision?.({ ...at, elevation }, { ...dest, elevation }, moveTest); } catch { blocked = false; }
     if (blocked) continue;
     const topLeft = { x: dest.x - (targetDoc.width * grid.size) / 2, y: dest.y - (targetDoc.height * grid.size) / 2 };
     const snapped = grid.getSnappedPoint?.(topLeft, { mode: globalThis.CONST?.GRID_SNAPPING_MODES?.TOP_LEFT_CORNER ?? 16 }) ?? topLeft;
@@ -255,12 +269,72 @@ async function push(activity, hits, message) {
   return done.length ? done.join("; ") : null;
 }
 
+// Cleave, once per turn in combat: the turn each attacker last used it, by actor uuid.
+const cleavedThisTurn = new Map();
+const turnKey = () => game.combat?.started ? `${game.combat.id}:${game.combat.round}:${game.combat.turn}` : null;
+
+/** A melee weapon's reach in feet: what dnd5e prepares, else 5 ft (10 ft with the Reach property). */
+const weaponReach = (item) => Number(item?.system?.range?.reach) || (item?.system?.properties?.has?.("rch") ? 10 : 5);
+
+/**
+ * The creatures a Cleave could go on to: within 5 ft of a creature hit and within the attacker's reach,
+ * not the attacker, one it hit, or its allies; living, and (for players) not hidden.
+ */
+export function cleaveCandidates(attackerDoc, hitDocs, reach) {
+  if (!attackerDoc?.parent || !hitDocs.length) return [];
+  const hit = new Set(hitDocs.map(d => d.id));
+  return [...(attackerDoc.parent.tokens ?? [])].filter(doc => doc.actor && doc.id !== attackerDoc.id && !hit.has(doc.id)
+    && !(doc.disposition && doc.disposition === attackerDoc.disposition) && !doc.actor.statuses?.has?.("dead")
+    && !(doc.hidden && !game.user.isGM)
+    && hitDocs.some(h => tokenDistance(h, doc) <= 5) && tokenDistance(attackerDoc, doc) <= reach);
+}
+
+/** Cleave: offer an attack at a second creature, and make it (its Luck Dice and damage settle first). */
+async function cleave(message, activity, hits) {
+  if (!isLike(activity, "attack") || activity.attack?.type?.value !== "melee" || String(message.system?.mode ?? "").startsWith("thrown")) return null;
+  const actor = activity.actor, turn = turnKey();
+  if (turn && cleavedThisTurn.get(actor.uuid) === turn) return null;
+  const attackerDoc = attackerToken(activity, message);
+  const hitDocs = (await Promise.all(hits.map(h => h.token ? fromUuid(h.token) : null))).filter(d => d?.actor);
+  const candidates = cleaveCandidates(attackerDoc, hitDocs, weaponReach(activity.item));
+  if (!candidates.length) { debug(`cleave: no second creature in reach for ${actor.name}`); return null; }
+  const weapon = activity.item?.name ?? "the weapon";
+  const choice = await promptChoice("Cleave",
+    `<p>Cleave: attack a second creature with <strong>${escapeHTML(weapon)}</strong>? Its damage leaves out your ability modifier.</p>`,
+    [...candidates.map(c => ({ action: c.id, label: c.name })), { action: "no", label: "No" }]);
+  const second = candidates.find(c => c.id === choice);
+  if (!second) return null;
+  if (turn) cleavedThisTurn.set(actor.uuid, turn);
+  const previous = [...(game.user.targets ?? [])].map(t => t.id);
+  canvas.tokens?.setTargets([second.id], { mode: "replace" });
+  try {
+    const rolls = await activity.rollAttack({ attackMode: message.system?.mode }, {}, {
+      data: { flavor: `${weapon} - Cleave`, flags: { [MODULE_ID]: { [CLEAVE_FLAG]: true } } }
+    });
+    await pendingAttacks.get(rolls?.[0]?.parent?.id);
+  } finally {
+    canvas.tokens?.setTargets(previous, { mode: "replace" });
+  }
+  return `Cleave attack at ${second.name}`;
+}
+
+/** dnd5e.preRollDamageV2 — a Cleave attack's damage: no ability modifier, unless it's negative. Never cancels. */
+export function onPreRollDamageCleave(config) {
+  if (!config?.[MODULE_ID]?.[CLEAVE_FLAG]) return;
+  const base = config.rolls?.find(r => r?.base) ?? config.rolls?.[0];
+  if (!base?.parts || (Number(base.data?.mod) || 0) < 0) return;
+  base.parts = base.parts.filter(p => String(p).trim() !== "@mod");
+  debug(`cleave: ${config.subject?.actor?.name ?? "the attacker"}'s damage leaves out the ability modifier`);
+}
+
 /**
  * After the attack (and its damage): carry out the weapon's mastery, and note
- * what it did on the attack card. Runs on the attacker's client.
+ * what it did on the attack card. Runs on the attacker's client. A Cleave attack's
+ * own card has no mastery: it doesn't Cleave again.
  */
 export async function applyWeaponMastery(message, activity) {
   if (!isWeaponMasteryEnabled() || !message?.system || message.getFlag?.(MODULE_ID, MASTERY_RESULT_FLAG)) return;
+  if (message.getFlag?.(MODULE_ID, CLEAVE_FLAG)) return;
   const kind = message.system.mastery;
   if (!kind || !LABELS[kind] || !activity?.actor) {
     if (!kind) debug(`weapon mastery: ${activity?.item?.name ?? "this attack"} used no mastery (dnd5e only records one the attacker has mastered)`);
@@ -274,6 +348,7 @@ export async function applyWeaponMastery(message, activity) {
   else if (kind === "topple") text = await topple(message, activity, hits);
   else if (kind === "sap" || kind === "vex" || kind === "slow") text = await markEffect(kind, activity, hits);
   else if (kind === "push") text = await push(activity, hits, message);
+  else if (kind === "cleave") text = await cleave(message, activity, hits);
   if (!text) return;
   await message.setFlag(MODULE_ID, MASTERY_RESULT_FLAG, { kind, label: LABELS[kind], text });
   debug(`weapon mastery: ${LABELS[kind]} — ${text}`);

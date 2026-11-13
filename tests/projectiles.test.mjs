@@ -29,6 +29,10 @@ test("rayCount: needs the setting and more than one ray", () => {
   settings.rayAutomation = true;
   assert.equal(rayCount(ray, usage(null)).count, 3);
   assert.equal(rayCount({ type: "attack", item: item("eldritch-blast", 0) }, usage(null)), null);
+  // dnd5e 6.1: another module's activity type that declares itself like an attack counts as one.
+  const like = (type) => ({ type: "homebrew-attack", item: item("scorching-ray"), isLike: (t) => t === type || t === "homebrew-attack" });
+  assert.equal(rayCount(like("attack"), usage(null)).count, 3);
+  assert.equal(rayCount(like("save"), usage(null)), null);
 });
 
 test("one target takes every dart, no dialog", async () => {
@@ -134,6 +138,57 @@ test("Luck Dice go on the luck target's first dart only", async () => {
   } finally {
     globalThis.dnd5e.dice.aggregateDamageRolls = (rolls) => rolls;
   }
+});
+
+test("dnd5e 6.1: the card's application options reach calculateDamage and applyDamage", async () => {
+  const goblin = hpActor("g", 20, { resist: true });
+  const passed = [];
+  const resistUnlessIgnored = (d, o) => d.reduce((s, x) => s + (o.ignore?.resistance?.has("force") ? x.value : Math.floor(x.value / 2)) * o.multiplier, 0);
+  goblin.calculateDamage = (d, o) => { passed.push(["calc", o]); return { amount: resistUnlessIgnored(d, o) }; };
+  goblin.applyDamage = async (d, o) => { passed.push(["apply", o]); goblin.seen.push(resistUnlessIgnored(d, o)); };
+  const message = card("m3", [damageRoll(8)]);
+  // As DamageMessageData#getDamageApplicationOptions: the card's defaults merged into the target's.
+  message.system = { getDamageApplicationOptions: (base) => ({ ...base, ignore: { resistance: new Set(["force"]) } }) };
+  await applyCardDamage({ messageId: "m3", targets: [{ token: "Token.g", name: "Goblin", multiplier: 0.5 }] });
+  assert.deepEqual(goblin.seen, [4]);                           // half on a save, resistance ignored
+  assert.equal(message.flags.appliedDamage[0].amount, 4);
+  const [[, calc], [, apply]] = passed;
+  assert.equal(calc.multiplier, 0.5); assert.ok(calc.ignore.resistance.has("force"));
+  assert.equal(apply.multiplier, 0.5); assert.ok(apply.ignore.resistance.has("force"));
+  assert.equal(apply.isDelta, true); assert.equal(apply.originatingMessage, message);
+
+  // dnd5e 6.0 cards have no such method: just the multiplier.
+  passed.length = 0;
+  delete message.system;
+  await applyCardDamage({ messageId: "m3", targets: [{ token: "Token.g", name: "Goblin" }] });
+  assert.deepEqual(passed.map(([, o]) => o.ignore), [undefined, undefined]);
+  assert.deepEqual(goblin.seen, [4, 4]);
+});
+
+test("healing heals: it reaches dnd5e positive, as its own tray passes it (dnd5e negates healing types itself)", async () => {
+  const healed = hpActor("h", 20);
+  // As Actor5e#calculateDamage: healing negated, temporary HP apart.
+  const calculate = (d, { multiplier }) => {
+    const out = { amount: 0, temp: 0 };
+    for (const x of d) {
+      const value = x.value * multiplier;
+      if (x.type === "temphp") out.temp += value;
+      else out.amount += x.type === "healing" ? -value : value;
+    }
+    return out;
+  };
+  healed.calculateDamage = (d, o) => calculate(d, o);
+  healed.applyDamage = async (d, o) => { const { amount, temp } = calculate(d, o); healed.system._source.attributes.hp.value -= amount; healed.system._source.attributes.hp.temp = Math.max(healed.system._source.attributes.hp.temp, temp); };
+  const cure = card("heal1", [damageRoll(8, { type: "healing" })]);
+  await applyCardDamage({ messageId: "heal1", targets: [{ token: "Token.h", name: "Hurt" }] });
+  assert.equal(healed.system._source.attributes.hp.value, 28);
+  assert.equal(cure.flags.appliedDamage[0].amount, -8);                 // shown as +8 on the card
+  assert.equal(cure.flags.appliedDamage[0].hp.value, -8);               // and undone the right way
+
+  const armor = card("heal2", [damageRoll(5, { type: "temphp" })]);
+  await applyCardDamage({ messageId: "heal2", targets: [{ token: "Token.h", name: "Hurt" }] });
+  assert.equal(healed.system._source.attributes.hp.temp, 5);
+  assert.equal(armor.flags.appliedDamage[0].temp, 5);
 });
 
 // ── rays ──

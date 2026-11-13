@@ -15,11 +15,11 @@
 
 import { requestApplyDamage } from "./apply.mjs";
 import { tokenDistance } from "./advantage.mjs";
-import { MODULE_ID, debug, isRetaliationEnabled, socket, getPrimaryGM, NO_DIALOG } from "./shared.mjs";
+import { MODULE_ID, debug, isRetaliationEnabled, socket, getPrimaryGM, NO_DIALOG, isLike } from "./shared.mjs";
 
 export const AGATHYS_FLAG = "agathys";
 const damageActivity = (item, name) => [...(item?.system?.activities?.values?.() ?? [])]
-  .find(a => a.type === "damage" && (!name || name.test(a.name ?? ""))) ?? null;
+  .find(a => isLike(a, "damage") && (!name || name.test(a.name ?? ""))) ?? null;
 
 // ── Armor of Agathys bookkeeping ──────────────────────────────────────────────
 

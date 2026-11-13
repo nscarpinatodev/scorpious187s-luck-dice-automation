@@ -39,11 +39,15 @@ function creature(name, col = 0, row = 0, { disposition = 1, statuses = [], item
   return { token, doc: d, actor: d.actor };
 }
 /** An activity (registered by uuid) on an item of `type`, applying effects with these statuses / dealing these damage types. */
-function source({ type = "spell", statuses = [], damage = [], magical = false, school = null } = {}) {
-  const item = { type, system: { properties: new Set(magical ? ["mgc"] : []), school } };
+// `remote`: the activity names the effect by uuid (a compendium's), rather than one on its item.
+function source({ type = "spell", statuses = [], damage = [], magical = false, school = null, remote = false } = {}) {
+  const effect = { statuses: new Set(statuses) };
+  const item = { type, system: { properties: new Set(magical ? ["mgc"] : []), school }, effects: new Map(remote ? [] : [["e", effect]]) };
+  const remoteUuid = `Compendium.x.effects.ActiveEffect.r${seq}`;
+  if (remote) uuids.set(remoteUuid, effect);
   const activity = {
     uuid: `Item.i${++seq}.Activity.a`, item,
-    effects: statuses.length ? [{ _id: "e", effect: { statuses: new Set(statuses) } }] : [],
+    effects: statuses.length ? [{ _id: "e", ...(remote ? { uuid: remoteUuid } : {}) }] : [],
     damage: { parts: damage.map(t => ({ types: new Set([t]) })) }
   };
   uuids.set(activity.uuid, activity);
@@ -162,6 +166,8 @@ test("what the save is against: charmed, frightened, poison — including saves 
   assert.deepEqual(saveReasons(elf, "wis", saveSource(source({ statuses: ["charmed"] }))).advantage, ["Fey Ancestry"]);
   assert.deepEqual(saveReasons(elf, "wis", saveSource(source({ statuses: ["frightened"] }))).advantage, ["Brave"]);
   assert.deepEqual(saveReasons(elf, "wis", saveSource(source({ statuses: ["paralyzed"] }))).advantage, []);
+  // An effect the activity names by uuid (not on its item) counts too.
+  assert.deepEqual(saveReasons(elf, "wis", saveSource(source({ statuses: ["charmed"], remote: true }))).advantage, ["Fey Ancestry"]);
 
   const dwarf14 = creature("Old", 0, 0, { items: [feat("dwarven-resilience", { rules: "2014" })] }).actor;
   const dwarf24 = creature("New", 0, 0, { items: [feat("dwarven-resilience", { rules: "2024" })] }).actor;

@@ -2,8 +2,8 @@
 import { env } from "./env.mjs";
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { meleeReach, leavesReach, onTokenMovedOA, onDisengageUsed, onTurnEndDisengage, DISENGAGED } from "../scripts/native/opportunity.mjs";
-import { reactionOptions, offerReactions, damageReactions, onTurnStartReaction, REACTIONS_FLAG } from "../scripts/native/reactions.mjs";
+import { meleeReach, leavesReach, onPreMoveTokenOA, moveWithOpportunityAttacks, opportunityReactors, reachExit, splitPath, answerOpportunity, onDisengageUsed, onTurnEndDisengage, DISENGAGED } from "../scripts/native/opportunity.mjs";
+import { reactionOptions, offerReactions, damageReactions, onTurnStartReaction, onCombatEndedReactions, hasReaction, REACTION_USED, REACTIONS_FLAG } from "../scripts/native/reactions.mjs";
 import { retaliationsFor, recordAgathys, onActorUpdatedAgathys, AGATHYS_FLAG } from "../scripts/native/retaliation.mjs";
 import { onPreApplyDamage, onDamageAppliedDeath, deathSaveResult, correctDeathSave, onPostRollDeathSave } from "../scripts/native/deathsaves.mjs";
 import { rememberAreas, clearAreasForUse, onPreDeleteRegion, flashRollsRemovesAreas } from "../scripts/native/areas.mjs";
@@ -85,43 +85,265 @@ test("leaving reach along the path, not staying in it or starting outside it", (
   assert.equal(leavesReach(orc.doc, pip.doc, path(1, 2), 10), false);  // still within a 10 ft reach
 });
 
-test("an opportunity attack is offered, made at the mover, and uses the reaction", async () => {
+// A started combat with everyone in it, and a mover whose legs are recorded (and that really gets there).
+// Foundry 14's getCombatantsByToken (the singular before it: see the stock effects test).
+function inCombat() { game.combat = { started: true, getCombatantsByToken: () => [{}] }; }
+function legged(mover) {
+  mover.legs = [];
+  mover.doc.move = async (waypoints, options) => {
+    mover.legs.push({ to: waypoints.map(w => w.x), options });
+    Object.assign(mover.doc, { x: waypoints.at(-1).x, y: waypoints.at(-1).y });
+    return true;
+  };
+  return mover;
+}
+const reactorsOf = (mover, path) => opportunityReactors(mover.doc, path);
+const walkTo = (...cols) => cols.map((c, i) => ({ x: c * 100, y: 0, action: "walk", ...(i === 0 ? {} : {}) }));
+
+test("the mover stops at the last spot in reach: the attack is rolled there, then it carries on", async () => {
   settings.opportunityAttacks = true;
+  inCombat();
+  const glaive = weapon("Glaive", { rch: true });                          // 10 ft reach
+  const orc = creature("Orc", 0, 0, { items: [glaive.item] });
+  const pip = legged(creature("Pip", 1, 0, { disposition: 1 }));
+  let at = null;
+  prompts.choice = async () => { at = pip.doc.x; return "attack"; };
+  const path = walkTo(1, 5);
+  await moveWithOpportunityAttacks(pip.doc, path, reactorsOf(pip, path));
+  assert.equal(at, 200);                                                   // still within the orc's 10 ft
+  assert.equal(glaive.attacks.length, 1);
+  assert.deepEqual(glaive.attacks[0].targets, [pip.token.id]);
+  assert.match(glaive.attacks[0].args[2].data.flavor, /Opportunity Attack/);
+  assert.deepEqual(pip.legs.map(l => l.to), [[200], [500]]);
+  assert.equal(pip.doc.x, 500);
+  // Every leg is marked, so it isn't caught again.
+  assert.ok(pip.legs.every(l => l.options[MODULE_ID].opportunityLeg));
+  assert.equal(orc.actor.statuses.has(REACTION_USED), true);
+});
+
+test("dnd5e 6.1's stock effects: No Opportunity Attacks and No Reactions keep an enemy from it; Disengaged provokes none", async () => {
+  settings.opportunityAttacks = true;
+  inCombat();
+  const stock = (key, id, extra = {}) => ({ id, disabled: false, isSuppressed: false, _stats: { compendiumSource: `Compendium.dnd5e.effects.ActiveEffect.${key}` }, ...extra });
+  const orc = creature("Orc", 0, 0, { items: [weapon("Axe").item] });
+  const pip = creature("Pip", 1, 0, { disposition: 1 });
+  const path = walkTo(1, 3);
+  assert.equal(reactorsOf(pip, path).length, 1);
+  game.combat = { started: true, getCombatantByToken: () => ({}) };      // before Foundry 14
+  assert.equal(reactorsOf(pip, path).length, 1);
+  inCombat();
+  orc.actor.effects.push(stock("qfTVWq97wiQgSSSM", "noOA"));                 // Shocking Grasp: can't make them
+  assert.equal(reactorsOf(pip, path).length, 0);
+  orc.actor.effects[0].disabled = true;                                     // switched off: it counts no more
+  assert.equal(reactorsOf(pip, path).length, 1);
+  orc.actor.effects.splice(0, 1, stock("tZuPpkTWg8lVjxhL", "noR"));          // No Reactions
+  assert.equal(reactorsOf(pip, path).length, 0);
+  assert.equal(hasReaction(orc.actor), false);
+  orc.actor.effects.length = 0;
+
+  // A stock Disengaged (2024 Monk's Focus) provokes nothing, the module doesn't add its own, and both end with the turn.
+  const walker = legged(creature("Walker", 1, 0, { disposition: 1 }));
+  walker.actor.effects.push(stock("DovP6Uo8YmIohHeK", "dis", { _stats: { duplicateSource: "Compendium.dnd5e.effects.ActiveEffect.DovP6Uo8YmIohHeK" } }));
+  const walk = { method: "dragging", chain: [], origin: { x: 100, y: 0 }, passed: { waypoints: [{ x: 300, y: 0, action: "walk" }] }, pending: { waypoints: [] } };
+  assert.equal(onPreMoveTokenOA(walker.doc, walk, {}), undefined);
+  await onDisengageUsed({ name: "Disengage", item: { name: "Step of the Wind" }, actor: walker.actor });
+  assert.deepEqual(walker.actor.toggled, []);
+  const deleted = [];
+  walker.actor.deleteEmbeddedDocuments = async (_type, ids) => { deleted.push(...ids); };
+  await onTurnEndDisengage({ started: true, scene }, { tokenId: walker.token.id });
+  assert.deepEqual(deleted, ["dis"]);
+
+  // 2024 Monk's Patient Defense isn't named Disengage, but applies the stock effect: the status goes on too.
+  const monk = creature("Monk", 5, 5, { disposition: 1 });
+  await onDisengageUsed({ name: "Patient Defense", item: { name: "Monk's Focus" }, actor: monk.actor,
+    effects: [{ _id: "x", uuid: "Compendium.dnd5e.effects.ActiveEffect.DovP6Uo8YmIohHeK" }] });
+  assert.ok(monk.actor.statuses.has(DISENGAGED));
+  await onDisengageUsed({ name: "Flurry of Blows", item: { name: "Monk's Focus" }, actor: creature("Other", 6, 6).actor, effects: [] });
+});
+
+test("the SRD's own effects: Shocked (2024 Shocking Grasp) and Staggered stop opportunity attacks; 2014 Shocking Grasp, every reaction", () => {
+  settings.opportunityAttacks = true;
+  inCombat();
+  const caster = (identifier, rules) => {
+    const uuid = `Actor.caster.Item.${identifier}${rules}`;
+    uuids.set(uuid, { documentName: "Item", uuid, system: { identifier, source: { rules } } });
+    return uuid;
+  };
+  const from = (identifier, rules, extra = {}) => ({ id: `${identifier}${rules}`, disabled: false, isSuppressed: false,
+    system: { origin: { item: caster(identifier, rules) } }, _stats: {}, name: "", ...extra });
+  const orc = creature("Orc", 0, 0, { items: [weapon("Axe").item] });
+  const pip = creature("Pip", 1, 0, { disposition: 1 });
+  const path = walkTo(1, 3);
+  const withEffect = (effect) => { orc.actor.effects.length = 0; if (effect) orc.actor.effects.push(effect); return reactorsOf(pip, path).length; };
+
+  assert.equal(withEffect(null), 1);
+  assert.equal(withEffect(from("shocking-grasp", "2024", { name: "Shocked" })), 0);
+  assert.equal(hasReaction(orc.actor), true);                                    // its other reactions stay
+  assert.equal(withEffect(from("brutal-strike", "2024", { name: "Staggered" })), 0);
+  assert.equal(withEffect(from("brutal-strike", "2024", {                       // by its source, whatever it's called
+    name: "Reeling", _stats: { duplicateSource: "Actor.b.Item.bs.ActiveEffect.uacly0JAXLVwAS6y" } })), 0);
+  assert.equal(withEffect(from("brutal-strike", "2024", { name: "Hamstrung" })), 1); // its other blows don't
+  assert.equal(withEffect(from("shocking-grasp", "2024", { name: "Shocked", disabled: true })), 1);
+  assert.equal(withEffect(from("shocking-grasp", "2014", { name: "Shocking Grasp" })), 0);
+  assert.equal(hasReaction(orc.actor), false);                                   // 2014: no reactions at all
+  orc.actor.effects.length = 0;
+});
+
+test("already at the edge of reach: no first leg; each enemy is asked where the path leaves its own reach", async () => {
+  settings.opportunityAttacks = true;
+  inCombat();
+  const axe = weapon("Axe"), glaive = weapon("Glaive", { rch: true });
+  creature("Near", 0, 0, { items: [axe.item] });
+  creature("Long", 3, 1, { items: [glaive.item] });
+  const pip = legged(creature("Pip", 1, 0, { disposition: 1 }));
+  const seen = [];
+  prompts.choice = async (_t, content) => { seen.push([content.match(/<strong>(\w+)<\/strong>'s reach/)[1], pip.doc.x]); return "no"; };
+  const path = walkTo(1, 8);
+  await moveWithOpportunityAttacks(pip.doc, path, reactorsOf(pip, path));
+  assert.deepEqual(seen, [["Near", 100], ["Long", 500]]);
+  assert.deepEqual(pip.legs.map(l => l.to), [[500], [800]]);
+  assert.equal(axe.attacks.length + glaive.attacks.length, 0);
+});
+
+test("the attack drops or moves the mover: it doesn't carry on", async () => {
+  settings.opportunityAttacks = true;
+  inCombat();
+  creature("Orc", 0, 0, { items: [weapon("Axe").item] });
+  const pip = legged(creature("Pip", 1, 0, { disposition: 1 }));
+  prompts.choice = async () => { pip.actor.system.attributes.hp.value = 0; return "no"; };
+  const path = walkTo(1, 5);
+  await moveWithOpportunityAttacks(pip.doc, path, reactorsOf(pip, path));
+  assert.deepEqual(pip.legs, []);
+
+  const pushed = legged(creature("Pushed", 11, 0, { disposition: 1 }));
+  creature("Ogre", 10, 0, { items: [weapon("Club").item] });
+  prompts.choice = async () => { pushed.doc.x = 1300; return "no"; };
+  const route = walkTo(11, 15);
+  await moveWithOpportunityAttacks(pushed.doc, route, reactorsOf(pushed, route));
+  assert.deepEqual(pushed.legs, []);
+});
+
+test("the movement hook refuses what would leave reach and remakes it in legs; everything else passes", async () => {
+  settings.opportunityAttacks = true;
+  inCombat();
+  const axe = weapon("Axe");
+  creature("Orc", 0, 0, { items: [axe.item] });
+  creature("Ally", 0, 1, { disposition: 1, items: [weapon("Sword").item] });
+  const pip = legged(creature("Pip", 1, 0, { disposition: 1 }));
+  prompts.choice = async () => "no";
+  const walk = (extra = {}) => ({ method: "dragging", chain: [], origin: { x: 100, y: 0 }, passed: { waypoints: [{ x: 300, y: 0, action: "walk", cost: 10 }] }, pending: { waypoints: [] }, constrainOptions: { ignoreWalls: true }, ...extra });
+  // None of these are refused.
+  assert.equal(onPreMoveTokenOA(pip.doc, walk({ passed: { waypoints: [{ x: 300, y: 0, action: "blink" }] } }), {}), undefined);
+  assert.equal(onPreMoveTokenOA(pip.doc, walk({ method: "undo" }), {}), undefined);
+  assert.equal(onPreMoveTokenOA(pip.doc, walk({ method: "config" }), {}), undefined);
+  assert.equal(onPreMoveTokenOA(pip.doc, walk(), { [MODULE_ID]: { forced: true } }), undefined);
+  assert.equal(onPreMoveTokenOA(pip.doc, walk(), { [MODULE_ID]: { opportunityLeg: true } }), undefined);
+  assert.equal(onPreMoveTokenOA(pip.doc, walk({ chain: ["earlier"] }), {}), undefined);
+  pip.actor.statuses.add(DISENGAGED);
+  assert.equal(onPreMoveTokenOA(pip.doc, walk(), {}), undefined);
+  pip.actor.statuses.delete(DISENGAGED);
+  // Staying in reach.
+  assert.equal(onPreMoveTokenOA(pip.doc, walk({ passed: { waypoints: [{ x: 100, y: 100, action: "walk" }] } }), {}), undefined);
+  settings.opportunityAttacks = false;
+  assert.equal(onPreMoveTokenOA(pip.doc, walk(), {}), undefined);
+  settings.opportunityAttacks = true;
+  // Outside combat, or with someone not in it: no attack.
+  game.combat = null;
+  assert.equal(onPreMoveTokenOA(pip.doc, walk(), {}), undefined);
+  game.combat = { started: true, getCombatantsByToken: () => [] };
+  assert.equal(onPreMoveTokenOA(pip.doc, walk(), {}), undefined);
+  inCombat();
+
+  // This one is: the whole path, its options kept, without the measured parts of its waypoints.
+  assert.equal(onPreMoveTokenOA(pip.doc, walk(), {}), false);
+  // While it's underway, another movement of the token waits.
+  assert.equal(onPreMoveTokenOA(pip.doc, walk(), {}), false);
+  await (await import("../scripts/native/opportunity.mjs")).legsDone;
+  assert.deepEqual(pip.legs.map(l => l.to), [[300]]);
+  assert.equal(pip.legs[0].options.method, "dragging");
+  assert.deepEqual(pip.legs[0].options.constrainOptions, { ignoreWalls: true });
+  assert.equal(pip.doc.x, 300);
+});
+
+test("paths cut at a stop", () => {
+  const path = [{ x: 0, y: 0 }, { x: 100, y: 0, action: "walk", cost: 5 }, { x: 400, y: 0, action: "fly" }];
+  const { walk, stop, rest } = splitPath(path, { segment: 2, point: { x: 200, y: 0, elevation: 0 } });
+  assert.deepEqual(walk, [{ x: 100, y: 0, action: "walk" }, { x: 200, y: 0, elevation: 0, action: "fly", snapped: true }]);
+  assert.deepEqual(rest, [stop, { x: 400, y: 0, action: "fly" }]);
+  // A stop on the waypoint already reached: nothing to walk, nothing doubled.
+  const there = splitPath([{ x: 0, y: 0 }, { x: 300, y: 0 }], { segment: 1, point: { x: 0, y: 0 } });
+  assert.deepEqual(there.walk, []);
+  assert.deepEqual(there.rest.map(w => w.x), [0, 300]);
+});
+
+test("a reaction is one status: used up, seen by everyone, back on its turn or when combat ends", async () => {
+  settings.opportunityAttacks = true;
+  inCombat();
+  const axe = weapon("Axe");
+  const orc = creature("Orc", 0, 0, { items: [axe.item] });
+  const pip = legged(creature("Pip", 1, 0, { disposition: 1 }));
+  prompts.choice = async () => "attack";
+  const path = walkTo(1, 3);
+  await moveWithOpportunityAttacks(pip.doc, path, reactorsOf(pip, path));
+  assert.equal(axe.attacks.length, 1);
+  assert.deepEqual(orc.actor.toggled, [[REACTION_USED, true]]);
+  assert.equal(hasReaction(orc.actor), false);
+
+  // Used: not a candidate for the next mover, so no attempt and no pause.
+  const tam = legged(creature("Tam", 1, 1, { disposition: 1 }));
+  assert.deepEqual(reactorsOf(tam, walkTo(1, 3)), []);
+
+  // Another creature's turn changes nothing; its own turn gives it back.
+  await onTurnStartReaction({ scene }, { tokenId: pip.token.id });
+  assert.equal(hasReaction(orc.actor), false);
+  await onTurnStartReaction({ scene }, { tokenId: orc.token.id });
+  assert.equal(hasReaction(orc.actor), true);
+
+  await orc.actor.toggleStatusEffect(REACTION_USED, { active: true });
+  await onCombatEndedReactions({ combatants: [{ actor: orc.actor }, { actor: pip.actor }] });
+  assert.equal(hasReaction(orc.actor), true);
+
+  // Only the primary GM clears it.
+  await orc.actor.toggleStatusEffect(REACTION_USED, { active: true });
+  game.modules.get("scorpious187s-lib").api.utils.primaryGM = () => ({ id: "someone-else" });
+  await onTurnStartReaction({ scene }, { tokenId: orc.token.id });
+  assert.equal(hasReaction(orc.actor), false);
+});
+
+test("two prompts open for one enemy: only the first answered attacks; a mover gone by then isn't attacked", async () => {
+  settings.opportunityAttacks = true;
+  inCombat();
   const axe = weapon("Axe");
   const orc = creature("Orc", 0, 0, { items: [axe.item] });
   const pip = creature("Pip", 1, 0, { disposition: 1 });
-  let asked = null;
-  prompts.choice = async (_t, content) => { asked = content; return "attack"; };
-  const move = { origin: { x: 100, y: 0 }, passed: { waypoints: [{ x: 300, y: 0, action: "walk" }] } };
-  await onTokenMovedOA(pip.doc, move, {});
-  assert.match(asked, /Pip<\/strong> is leaving <strong>Orc<\/strong>'s reach/);
+  const answers = [];
+  prompts.choice = () => new Promise(resolve => answers.push(resolve));
+  const ask = () => answerOpportunity({ token: orc.doc.uuid, actor: orc.actor.uuid, mover: pip.doc.uuid, moverName: "Pip", activity: axe.activity.uuid, reach: 5 });
+  const first = ask(), second = ask();
+  await env.flush();
+  answers.forEach(answer => answer("attack"));
+  assert.equal((await first)?.identifier, "opportunity");
+  assert.equal(await second, null);
   assert.equal(axe.attacks.length, 1);
-  assert.deepEqual(axe.attacks[0].targets, [pip.token.id]);
-  assert.match(axe.attacks[0].args[2].data.flavor, /Opportunity Attack/);
-  // Reaction spent: not offered again until its turn.
-  await onTokenMovedOA(pip.doc, move, {});
+
+  // The answer came after the mover carried on.
+  await onTurnStartReaction({ scene }, { tokenId: orc.token.id });
+  pip.doc.x = 500;
+  prompts.choice = async () => "attack";
+  assert.equal(await ask(), null);
   assert.equal(axe.attacks.length, 1);
-  onTurnStartReaction({ scene }, { tokenId: orc.token.id });
-  await onTokenMovedOA(pip.doc, move, {});
-  assert.equal(axe.attacks.length, 2);
+  assert.equal(hasReaction(orc.actor), true);                             // and it isn't spent
 });
 
-test("no opportunity attack: Disengaged, teleporting, being pushed, allies, the setting off", async () => {
-  settings.opportunityAttacks = true;
+test("outside combat a reaction isn't tracked: no turn would ever give it back", async () => {
+  game.combat = null;
   const axe = weapon("Axe");
-  creature("Orc", 0, 0, { items: [axe.item] });
+  const orc = creature("Orc", 0, 0, { items: [axe.item] });
   const pip = creature("Pip", 1, 0, { disposition: 1 });
-  creature("Ally", 0, 1, { disposition: 1, items: [weapon("Sword").item] });
   prompts.choice = async () => "attack";
-  const walk = { origin: { x: 100, y: 0 }, passed: { waypoints: [{ x: 300, y: 0, action: "walk" }] } };
-  await onTokenMovedOA(pip.doc, { ...walk, passed: { waypoints: [{ x: 300, y: 0, action: "blink" }] } }, {});
-  await onTokenMovedOA(pip.doc, walk, { [MODULE_ID]: { forced: true } });
-  pip.actor.statuses.add(DISENGAGED);
-  await onTokenMovedOA(pip.doc, walk, {});
-  pip.actor.statuses.delete(DISENGAGED);
-  settings.opportunityAttacks = false;
-  await onTokenMovedOA(pip.doc, walk, {});
-  assert.equal(axe.attacks.length, 0);
+  await answerOpportunity({ token: orc.doc.uuid, actor: orc.actor.uuid, mover: pip.doc.uuid, activity: axe.activity.uuid, reach: 5 });
+  assert.equal(axe.attacks.length, 1);
+  assert.deepEqual(orc.actor.toggled, []);
 });
 
 test("Disengage features give Disengaged; it ends with the creature's turn", async () => {
@@ -179,6 +401,14 @@ test("Absorb Elements halves the elemental damage; Parry reduces it", async () =
   const parried = await damageReactions(melee, { token: fighter.doc.uuid, actor: fighter.actor.uuid }, [{ value: 9, type: "slashing", properties: [] }]);
   assert.deepEqual(parried.damages.map(d => d.value), [2]);
   assert.match(parried.notes[0], /Parry/);
+
+  // Healing isn't something to react to.
+  let asked = false;
+  prompts.choice = async () => { asked = true; return "parry"; };
+  const healing = [{ value: 9, type: "healing", properties: [] }];
+  const untouched = await damageReactions(melee, { token: fighter.doc.uuid, actor: fighter.actor.uuid }, healing);
+  assert.equal(asked, false);
+  assert.deepEqual(untouched.damages, healing);
 });
 
 // ── Retaliation ──

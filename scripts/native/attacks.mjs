@@ -6,13 +6,13 @@ import { applyHitEffects } from "./effects.mjs";
 import { handlePrivateAttack } from "./outcome.mjs";
 import { addOnHitRiders } from "./riders.mjs";
 import { offerReactions, reactionMultiplier } from "./reactions.mjs";
-import { applyWeaponMastery } from "./mastery.mjs";
+import { applyWeaponMastery, CLEAVE_FLAG } from "./mastery.mjs";
 import { autoRolledEnabled } from "./autoroll.mjs";
 import { applyRetaliation } from "./retaliation.mjs";
 import { rollExtras } from "./boosts.mjs";
 import { applyInvocationsOnHit } from "./invocations.mjs";
 import { offerEmpowered } from "./metamagic.mjs";
-import { LDA, MODULE_ID, LUCK_DICE_ITEM_NAME, IMPACT_DICE_ITEM_NAME, clamp, debug, getDiceUses, actorHasLuckDice, promptChoice, promptSlider, getKeptD20Result, spendDiceFromPools, buildDiceAvailableHTML, isLuckDiceEnabled, combineRolls, HISTORY_FLAG, diceFaces, getAttackAutomation, readCardHistory, updateRollCard, recordCardStep, finishCardHistory, escapeHTML, canUseLuck, pendingLuckDamage, isSkipAttackDialogEnabled, NO_DIALOG } from "./shared.mjs";
+import { LDA, MODULE_ID, LUCK_DICE_ITEM_NAME, IMPACT_DICE_ITEM_NAME, clamp, debug, getDiceUses, actorHasLuckDice, promptChoice, promptSlider, getKeptD20Result, spendDiceFromPools, buildDiceAvailableHTML, isLuckDiceEnabled, combineRolls, HISTORY_FLAG, diceFaces, getAttackAutomation, readCardHistory, updateRollCard, recordCardStep, finishCardHistory, escapeHTML, canUseLuck, pendingLuckDamage, isSkipAttackDialogEnabled, NO_DIALOG, showRollToAdd, waitForAddedRolls, isLike } from "./shared.mjs";
 
 // ── Attacks ───────────────────────────────────────────────────────────────────
 
@@ -172,7 +172,7 @@ export async function onDamageRolled(rolls, data) {
     const message  = roll?.parent;
     const activity = data?.subject;
     const actor    = activity?.actor;
-    if (!message || !activity || activity.type === "heal") return;
+    if (!message || !activity || isLike(activity, "heal")) return;
     if (!(roll instanceof CONFIG.Dice.DamageRoll)) return;
 
     // Only after a hit. A use with no attack card (a save-for-damage spell) is offered.
@@ -208,12 +208,13 @@ export async function onDamageRolled(rolls, data) {
 
     const bonus = new CONFIG.Dice.DamageRoll(`${diceCount}d6`, roll.data ?? {}, luckDamageOptions(roll));
     await bonus.evaluate();
-    if (game.dice3d) await game.dice3d.showForRoll(bonus, game.user, true, null, false);
+    await showRollToAdd(bonus);
 
     const history = readCardHistory(message);
     history.entries.push({ kind: "damage", label: `+${diceCount}d6 Luck Dice to damage${isCrit ? " (critical)" : ""}` });
     // The damage tray totals every DamageRoll on the card, so it applies these too.
     await updateRollCard(message, { rolls: [...message.rolls, bonus], history });
+    await waitForAddedRolls(message);
     console.log(`[${MODULE_ID}] native damage: ${actor.name} added ${diceCount}d6 = ${bonus.total}${isCrit ? " (critical)" : ""}`);
   } catch (err) {
     console.error(`[${MODULE_ID}] native damage error:`, err);
@@ -281,9 +282,9 @@ export function finalRollDialog(config, dialog) {
   if (config?.[MODULE_ID]?.noDialog) { dialog.configure = false; return; }
   const hooks = config?.hookNames ?? [];
   const subject = config?.subject;
-  if (hooks.includes("attack") && subject?.type === "attack" && isSkipAttackDialogEnabled() && !ac5eOptins(config).length) {
+  if (hooks.includes("attack") && isLike(subject, "attack") && isSkipAttackDialogEnabled() && !ac5eOptins(config).length) {
     dialog.configure = false;
-  } else if (hooks.includes("damage") && (subject?.type === "heal" || subject?.type === "damage") && autoRolledEnabled(subject)) {
+  } else if (hooks.includes("damage") && (isLike(subject, "heal") || isLike(subject, "damage")) && autoRolledEnabled(subject)) {
     dialog.configure = false;
   }
 }
@@ -297,9 +298,15 @@ export function hasDamage(activity) {
 export async function rollAttackDamage(attackMessage, activity, { fastForward }) {
   const { ability, ammunitionItem: ammunition, mode: attackMode } = attackMessage.system ?? {};
   const isCritical = !!attackMessage.rolls[0]?.isCritical;
+  // A Cleave attack's damage leaves out the ability modifier (mastery.mjs's damage hook reads this).
+  const cleave = !!attackMessage.getFlag?.(MODULE_ID, CLEAVE_FLAG);
+  const flags = { ...(fastForward ? NO_DIALOG[MODULE_ID] : {}), ...(cleave ? { [CLEAVE_FLAG]: true } : {}) };
   const dialog = fastForward ? { configure: false }
     : isCritical ? { options: { defaultButton: "critical" } } : {};
-  const rolls = await activity.rollDamage({ ability, ammunition, attackMode, isCritical, ...(fastForward ? NO_DIALOG : {}) }, dialog);
+  // Linked to the use card like the button's roll (its message id), so findAttackCard pairs it with this attack.
+  const origin = attackMessage.rolls[0]?.options?.originatingMessage ?? attackMessage.system?._source?.origin;
+  const message = origin ? { data: { system: { origin } } } : {};
+  const rolls = await activity.rollDamage({ ability, ammunition, attackMode, isCritical, ...(Object.keys(flags).length ? { [MODULE_ID]: flags } : {}) }, dialog, message);
   return rolls?.[0]?.parent ?? null;
 }
 

@@ -62,7 +62,9 @@ export function saveSource(message) {
   const itemType = item?.type ?? message?.data?.system?.item?.type ?? null;
   const statuses = new Set();
   for (const profile of activity?.effects ?? []) {
-    const effect = profile?.effect ?? item?.effects?.get?.(profile?._id);
+    // The item's own effect, or one the activity names by uuid (a compendium's, say). Not `profile.effect`:
+    // dnd5e deprecated it in 6.0 (gone in 6.2), and for a uuid it gives a Promise, not the effect.
+    const effect = item?.effects?.get?.(profile?._id) ?? (profile?.uuid ? fromUuidSync(profile.uuid, { strict: false }) : null);
     for (const status of effect?.statuses ?? []) statuses.add(status);
   }
   const damageTypes = new Set((activity?.damage?.parts ?? []).flatMap(part => [...(part?.types ?? [])]));

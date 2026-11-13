@@ -22,7 +22,7 @@
 import { requestApplyEffects } from "./effects.mjs";
 import { sourceItem, sourceActor, rulesOf } from "./advantage.mjs";
 import { sorceryPoints, spendSorceryPoints, metamagicCost } from "./metamagic.mjs";
-import { MODULE_ID, debug, isRollBoostsEnabled, isInvocationsEnabled, isMetamagicEnabled, combineRolls, getKeptD20Result, socket, getPrimaryGM } from "./shared.mjs";
+import { MODULE_ID, debug, isRollBoostsEnabled, isInvocationsEnabled, isMetamagicEnabled, combineRolls, getKeptD20Result, socket, getPrimaryGM, inAntimagic, antimagicStops } from "./shared.mjs";
 
 export const BOOST_FLAG = "boost";
 const BARDIC = "bardic-inspiration";
@@ -149,7 +149,7 @@ export function boostsFor(actor, kind, { spell: spellAttack = false } = {}) {
     }
   });
   const spell = SPELLS[kind];
-  const mark = spell ? spellMark(actor, spell.identifier) : null;
+  const mark = spell && !inAntimagic(actor) ? spellMark(actor, spell.identifier) : null; // dnd5e 6.1+: suppressed there
   if (mark) boosts.push({
     id: spell.identifier, label: `${spell.name} (+1d4)`,
     async use() {
@@ -189,7 +189,8 @@ function invocationAndMetamagicBoosts(actor, kind, { spell }) {
   const boosts = [];
   const talisman = kind === "save" && isInvocationsEnabled()
     ? [...(actor?.items ?? [])].find(i => i.system?.identifier === "protection-of-the-talisman") : null;
-  if (talisman && (!talisman.system?.uses?.max || usesLeft(talisman) > 0)) boosts.push({
+  // dnd5e 6.1+: in antimagic, not a Magical invocation, nor Seeking Spell (no spell attacks there).
+  if (talisman && !antimagicStops(actor, talisman) && (!talisman.system?.uses?.max || usesLeft(talisman) > 0)) boosts.push({
     id: "talisman", label: "Protection of the Talisman (+1d4)",
     async use() {
       const bonusRoll = await rollOne("1d4");
@@ -197,7 +198,7 @@ function invocationAndMetamagicBoosts(actor, kind, { spell }) {
       return { bonusRoll, label: "Added 1d4 Protection of the Talisman", detail: `+${bonusRoll.total}` };
     }
   });
-  const seeking = kind === "attack" && spell && isMetamagicEnabled()
+  const seeking = kind === "attack" && spell && isMetamagicEnabled() && !inAntimagic(actor)
     ? [...(actor?.items ?? [])].find(i => i.system?.identifier === "seeking-spell") : null;
   const cost = seeking ? metamagicCost("seeking", seeking) : 0;
   if (seeking && sorceryPoints(actor) >= cost) boosts.push({

@@ -354,3 +354,43 @@ test("Spell Sniper through a spell conduit (the range already multiplied): 2014 
   assert.equal(reach("2014", 96), null);                 // 480 ft: 120 × 2 × 2
   assert.match(reach("2014", 97), /485 of 480/);
 });
+
+test("line of sight on Foundry 14 levels: each token's level is tested, at its height, with the surfaces between", async () => {
+  const { hasLineOfSight, levelOf, elevatedCenter } = await import("../scripts/native/advantage.mjs");
+  const calls = [], surfaces = [];
+  const ground = { id: "ground" }, upper = { id: "upper" };
+  const levelScene = { levels: new Map([["ground", ground], ["upper", upper]]),
+    testSurfaceCollision: (from, to, o) => { surfaces.push([from.elevation, to.elevation, o.level.id]); return from.elevation !== to.elevation && floorBetween; } };
+  let floorBetween = true, blockedOn = null;
+  const saved = CONFIG.Canvas;
+  CONFIG.Canvas = { polygonBackends: { sight: { testCollision: (from, to, o) => { calls.push([o.level?.id ?? null, from.elevation, to.elevation]); return o.level?.id === blockedOn; } } } };
+  const token = (level, elevation, x) => ({ parent: levelScene, x, y: 0, width: 1, height: 1, depth: 1, elevation, _source: { level } });
+  try {
+    const archer = token("ground", 0, 0), lookout = token("upper", 10, 300), guard = token("ground", 0, 300);
+    assert.equal(levelOf(archer), ground);
+    assert.deepEqual(elevatedCenter(lookout), { x: 350, y: 50, elevation: 12.5 });   // its elevation plus half its depth
+
+    // Same level, nothing in the way.
+    assert.equal(hasLineOfSight(archer, guard), true);
+    assert.deepEqual(calls, [["ground", 2.5, 2.5]]);
+    // A wall on the guard's level only counts on that level's test.
+    calls.length = 0; blockedOn = "ground";
+    assert.equal(hasLineOfSight(archer, guard), false);
+    blockedOn = null;
+    // A floor between the levels blocks; with an opening in it, both levels' walls are checked.
+    assert.equal(hasLineOfSight(archer, lookout), false);
+    floorBetween = false; calls.length = 0;
+    assert.equal(hasLineOfSight(archer, lookout), true);
+    assert.deepEqual(calls.map(c => c[0]), ["ground", "upper"]);
+    blockedOn = "upper";
+    assert.equal(hasLineOfSight(archer, lookout), false);                             // a wall up there
+
+    // A scene without levels: one test, as before.
+    calls.length = 0; blockedOn = null;
+    const flat = { x: 0, y: 0, width: 1, height: 1, elevation: 0, parent: {} };
+    assert.equal(hasLineOfSight(flat, { ...flat, x: 300 }), true);
+    assert.deepEqual(calls, [[null, 2.5, 2.5]]);
+  } finally {
+    CONFIG.Canvas = saved;
+  }
+});
