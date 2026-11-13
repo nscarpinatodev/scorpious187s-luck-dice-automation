@@ -4,7 +4,7 @@
 import { requestApplyDamage } from "./apply.mjs";
 import { applyHitEffects } from "./effects.mjs";
 import { handlePrivateAttack } from "./outcome.mjs";
-import { addOnHitRiders } from "./riders.mjs";
+import { addOnHitRiders, applySavageAttacker } from "./riders.mjs";
 import { offerReactions, reactionMultiplier } from "./reactions.mjs";
 import { applyWeaponMastery, CLEAVE_FLAG } from "./mastery.mjs";
 import { autoRolledEnabled } from "./autoroll.mjs";
@@ -182,6 +182,7 @@ export async function onDamageRolled(rolls, data) {
       return;
     }
     // On-hit riders (any attacker), before the Luck Dice so the prompt follows them.
+    if (attackCard) await applySavageAttacker(message, activity);
     if (attackCard) await addOnHitRiders(message, activity, attackCard);
     // Empowered Spell: reroll some of a spell's damage dice, before any Luck Dice are added.
     await offerEmpowered(message, activity);

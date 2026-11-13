@@ -340,6 +340,37 @@ test("2024 Crossbow Expert: an off-hand hand crossbow adds its ability modifier 
   assert.deepEqual(roll([item("crossbow-expert", { rules: "2024" })], "offhand", ["1d6", "@mod"]), ["1d6", "@mod"]);
 });
 
+test("Two-Weapon Fighting: an off-hand attack adds its ability modifier, with any Light weapon", () => {
+  const dagger = weapon({ baseItem: "dagger", properties: ["lgt", "fin"], type: "simpleM" });
+  const roll = (feats, attackMode = "offhand") => {
+    const me = creature("Me", 0, 0, { disposition: 1, items: feats });
+    const config = { subject: attack(me, { item: dagger, ranged: false }), attackMode, rolls: [{ base: true, parts: ["1d4"] }] };
+    onPreRollDamageFeats(config);
+    return config.rolls[0].parts;
+  };
+  assert.deepEqual(roll([item("two-weapon-fighting")]), ["1d4", "@mod"]);
+  assert.deepEqual(roll([item("two-weapon-fighting", { rules: "2014" })]), ["1d4", "@mod"]);
+  assert.deepEqual(roll([]), ["1d4"]);
+  assert.deepEqual(roll([item("two-weapon-fighting")], "oneHanded"), ["1d4"]);
+});
+
+test("Great Weapon Fighting: two-handed melee damage dice — 2024 treats 1s and 2s as 3s, 2014 rerolls them once", () => {
+  const greatsword = weapon({ baseItem: "greatsword", properties: ["two", "hvy"], type: "martialM" });
+  const longsword = weapon({ baseItem: "longsword", properties: ["ver"], type: "martialM" });
+  const roll = (feats, it, attackMode, { ranged = false } = {}) => {
+    const me = creature("Me", 0, 0, { disposition: 1, items: feats });
+    const config = { subject: attack(me, { item: it, ranged }), attackMode, rolls: [{ base: true, parts: ["2d6", "@mod"] }, { parts: ["1d8"] }] };
+    onPreRollDamageFeats(config);
+    return config.rolls.map(r => r.parts);
+  };
+  assert.deepEqual(roll([item("great-weapon-fighting")], greatsword, "twoHanded"), [["2d6min3", "@mod"], ["1d8"]]);   // the weapon's dice only
+  assert.deepEqual(roll([item("great-weapon-fighting", { rules: "2014" })], greatsword, ""), [["2d6r<3", "@mod"], ["1d8"]]);
+  assert.deepEqual(roll([item("great-weapon-fighting")], longsword, "twoHanded"), [["2d6min3", "@mod"], ["1d8"]]);   // Versatile, two-handed
+  assert.deepEqual(roll([item("great-weapon-fighting")], longsword, "oneHanded"), [["2d6", "@mod"], ["1d8"]]);
+  assert.deepEqual(roll([item("great-weapon-fighting")], greatsword, "twoHanded", { ranged: true }), [["2d6", "@mod"], ["1d8"]]);
+  assert.deepEqual(roll([], greatsword, "twoHanded"), [["2d6", "@mod"], ["1d8"]]);
+});
+
 test("Spell Sniper through a spell conduit (the range already multiplied): 2014 doubles it, 2024 adds 60 ft times the multiplier", () => {
   const conduitBolt = { type: "spell", name: "Fire Bolt", flags: { "scorpious187s-custom-items": { conduitCast: { rangeMultiplier: 2 } } },
     system: { level: 0, range: { value: 240, units: "ft" } } };

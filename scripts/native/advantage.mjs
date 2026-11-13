@@ -491,22 +491,44 @@ function dropAc5eNearbyFoe(config) {
 }
 
 /**
- * dnd5e.preRollDamageV2 — 2024 Crossbow Expert ("Attack Rules"): the extra attack of the Light property
- * with a Light crossbow (an off-hand attack) adds the ability modifier to its damage, which dnd5e
- * leaves off an off-hand attack. Never cancels.
+ * dnd5e.preRollDamageV2 — weapon damage from feats and fighting styles ("Attack Rules"). Never cancels.
+ *   Off-hand attack (the Light property's extra attack), which dnd5e rolls without the ability modifier:
+ *     Two-Weapon Fighting adds it back; so does 2024 Crossbow Expert, with a Light crossbow.
+ *   Great Weapon Fighting — a melee weapon held in two hands (Two-Handed, or Versatile used two-handed):
+ *     2024 treats a 1 or 2 on its damage dice as a 3 ("min3"); 2014 rerolls them once ("r<3").
  */
 export function onPreRollDamageFeats(config) {
   if (!isAttackAdvantageEnabled()) return;
-  const activity = config?.subject;
+  const activity = config?.subject, actor = activity?.actor;
   const item = activity?.item;
-  if (!isLike(activity, "attack") || !String(config.attackMode ?? "").endsWith("offhand")) return;
-  if (item?.type !== "weapon" || !isCrossbow(item) || !item.system?.properties?.has?.("lgt")) return;
-  const feat = hasFeat(activity.actor, "crossbow-expert");
-  if (!feat || rulesOf(feat) !== "2024") return;
+  if (!isLike(activity, "attack") || item?.type !== "weapon") return;
   const base = config.rolls?.find(r => r?.base) ?? config.rolls?.[0];
-  if (!base || (base.parts ?? []).some(p => String(p).includes("@mod"))) return;
-  (base.parts ??= []).push("@mod");
-  debug(`crossbow expert: ${activity.actor.name}'s off-hand ${item.name} adds its ability modifier`);
+  if (!base) return;
+  const mode = String(config.attackMode ?? "");
+
+  if (mode.endsWith("offhand") && !(base.parts ?? []).some(p => String(p).includes("@mod"))) {
+    const crossbow = hasFeat(actor, "crossbow-expert");
+    const why = hasFeat(actor, "two-weapon-fighting") ? "Two-Weapon Fighting"
+      : (crossbow && rulesOf(crossbow) === "2024" && isCrossbow(item) && item.system?.properties?.has?.("lgt")) ? "Crossbow Expert" : null;
+    if (why) {
+      (base.parts ??= []).push("@mod");
+      debug(`${why}: ${actor.name}'s off-hand ${item.name} adds its ability modifier`);
+    }
+  }
+
+  const gwf = hasFeat(actor, "great-weapon-fighting");
+  const twoHands = mode === "twoHanded" || (!mode.startsWith("thrown") && item.system?.properties?.has?.("two"));
+  if (gwf && twoHands && activity.attack?.type?.value === "melee") {
+    const modifier = rulesOf(gwf) === "2014" ? "r<3" : "min3";
+    base.parts = (base.parts ?? []).map(p => withDieModifier(p, modifier));
+    debug(`great weapon fighting: ${actor.name}'s ${item.name} damage dice get "${modifier}"`);
+  }
+}
+
+/** A formula part with this modifier on each of its plain dice ("2d6" → "2d6min3"), not on ones already modified. */
+export function withDieModifier(part, modifier) {
+  if (typeof part !== "string") return part;
+  return part.replace(/(\d*)d(\d+)(?![\d\w<>=])/g, `$1d$2${modifier}`);
 }
 
 /**

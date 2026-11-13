@@ -1,9 +1,9 @@
 import { env } from "./env.mjs";
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { eligibleRiders, addOnHitRiders, claimRiderUse, spendsSomething, RIDERS } from "../scripts/native/riders.mjs";
+import { eligibleRiders, addOnHitRiders, claimRiderUse, spendsSomething, applySavageAttacker, RIDERS, SAVAGE_FLAG } from "../scripts/native/riders.mjs";
 
-const { settings, dialogs, uuids, damageRoll, makeToken } = env;
+const { settings, dialogs, uuids, damageRoll, makeToken, prompts } = env;
 beforeEach(() => { env.reset(); settings.onHitRiders = true; game.combat = null; });
 
 /** A damage activity whose rolls (and critical flag) are recorded. */
@@ -263,4 +263,99 @@ test("Sneak Attack needs advantage or an ally beside the target, and never disad
   assert.deepEqual(await offered(-1), []);                     // disadvantage: never
   ally.document.actor.statuses = new Set(["unconscious"]);
   assert.deepEqual(await offered(0), []);                      // an incapacitated ally doesn't count
+});
+
+
+test("Divine Strike and Primal Strike: once per turn on a weapon hit, their type picked; the improved dice at level 14 / 15", async () => {
+  settings.onHitRiders = true;
+  game.combat = { started: true, id: "c", round: 1, turn: 0 };
+  const strike = damageActivity("Divine Strike", 5), improved = damageActivity("Improved Divine Strike", 9);
+  const item = riderItem("Actor.rogue", "divine-strike", [strike, improved], { name: "Blessed Strikes: Divine Strike" });
+  const cleric = attacker([item]);
+  item.actor = Object.assign(cleric, { classes: { cleric: { system: { levels: 7 } } } });
+  const card = attackCard([target("g")], { advantageMode: 0 });
+  assert.deepEqual(names(await eligibleRiders(weaponAttack(cleric), card)), ["divine-strike"]);
+  dialogs.push(async () => "ok");
+  const asked = [];
+  prompts.choice = async (title, _content, buttons) => { asked.push([title, buttons.map(b => b.action)]); return "necrotic"; };
+  const message = damageCard();
+  await addOnHitRiders(message, weaponAttack(cleric), card);
+  assert.deepEqual(asked, [["Blessed Strikes: Divine Strike", ["radiant", "necrotic"]]]);
+  assert.equal(strike.rolled.length, 1);
+  assert.equal(improved.rolled.length, 0);
+  assert.equal(message.rolls.at(-1).options.type, "necrotic");
+  assert.deepEqual(names(await eligibleRiders(weaponAttack(cleric), card)), []);     // used this turn
+
+  game.combat.turn = 1;
+  cleric.classes.cleric.system.levels = 14;
+  assert.deepEqual((await eligibleRiders(weaponAttack(cleric), card))[0].activities, [improved]);
+  // Not on a spell attack.
+  const spellAttack = { type: "attack", actor: cleric, attack: { type: { value: "ranged", classification: "spell" } }, item: { type: "spell", system: { properties: new Set() } } };
+  assert.deepEqual(names(await eligibleRiders(spellAttack, card)), []);
+  game.combat = null;
+
+  assert.deepEqual(RIDERS["primal-strike"].damageType, ["cold", "fire", "lightning", "thunder"]);
+});
+
+test("Colossus Slayer: only against a creature missing Hit Points; the weapon's damage type", async () => {
+  settings.onHitRiders = true;
+  const slayer = damageActivity("Colossus Slayer", 6);
+  const ranger = attacker([riderItem("Actor.rogue", "hunters-prey", [slayer], { name: "Hunter's Prey" })]);
+  const hurt = (id, value) => {
+    const actor = { uuid: `Actor.${id}`, name: id, effects: [], system: { details: { type: { value: "beast" } }, attributes: { hp: { value, max: 30 } } } };
+    uuids.set(`Token.${id}`, { actor });
+    return { actor: actor.uuid, token: `Token.${id}`, name: id };
+  };
+  const card = (t) => attackCard([t], { advantageMode: 0 });
+  assert.deepEqual(names(await eligibleRiders(weaponAttack(ranger), card(hurt("whole", 30)))), []);
+  assert.deepEqual(names(await eligibleRiders(weaponAttack(ranger), card(hurt("wounded", 12)))), ["hunters-prey"]);
+  dialogs.push(async () => "ok");
+  const message = damageCard();
+  message.rolls[0].options.type = "piercing";
+  await addOnHitRiders(message, weaponAttack(ranger), card(hurt("wounded2", 12)));
+  assert.equal(message.rolls.at(-1).options.type, "piercing");
+  assert.deepEqual(message.flags.riders.map(r => [r.name, r.total]), [["Hunter's Prey", 6]]);
+});
+
+test("Savage Attacker: once per turn, the weapon dice rolled again and the higher total used", async () => {
+  settings.onHitRiders = true;
+  game.combat = { started: true, id: "c", round: 1, turn: 0 };
+  // A damage roll with real dice results, copied the way dnd5e's rolls are.
+  class DiceRoll extends CONFIG.Dice.DamageRoll {
+    constructor(results, options = {}) { super("2d6 + 3", {}, options); this.dice = [{ faces: 6, results: results.map(r => ({ result: r, active: true })) }]; this._total = this.total = results.reduce((a, b) => a + b, 0) + 3; }
+    toJSON() { return { results: this.dice[0].results.map(r => ({ ...r })), options: this.options }; }
+    static fromData(d) { const r = new DiceRoll([], d.options); r.dice[0].results = d.results; return r; }
+    _evaluateTotal() { return this.dice[0].results.filter(r => r.active).reduce((a, r) => a + r.result, 0) + 3; }
+  }
+  const savedRoll = globalThis.Roll;
+  let next = [];
+  globalThis.Roll = class { constructor(formula) { this.formula = formula; } async evaluate() { this.dice = next.map(v => ({ total: v })); return this; } };
+  const fighter = attacker([{ name: "Savage Attacker", type: "feat", system: { identifier: "savage-attacker" } }]);
+  fighter.isOwner = true;
+  const card = () => {
+    const m = damageCard();
+    m.rolls = [new DiceRoll([1, 2])];
+    m.update = async (u) => { if (u.rolls) m.rolls = u.rolls; for (const [k, v] of Object.entries(u)) if (k.startsWith("flags.")) m.flags[k.split(".").pop()] = v; };
+    return m;
+  };
+  try {
+    next = [5, 6];
+    const message = card();
+    await applySavageAttacker(message, weaponAttack(fighter));
+    assert.deepEqual(message.flags[SAVAGE_FLAG], { first: 3, second: 11, kept: "second" });
+    assert.equal(message.rolls[0]._total, 14);                                 // 5 + 6 + 3
+    assert.deepEqual(message.rolls[0].dice[0].results.filter(r => r.active).map(r => r.result), [5, 6]);
+
+    // Once per turn; next turn it rolls again, and a lower second roll keeps the first.
+    const again = card();
+    await applySavageAttacker(again, weaponAttack(fighter));
+    assert.equal(again.flags[SAVAGE_FLAG], undefined);
+    game.combat.turn = 1; next = [1, 1];
+    await applySavageAttacker(again, weaponAttack(fighter));
+    assert.deepEqual(again.flags[SAVAGE_FLAG], { first: 3, second: 2, kept: "first" });
+    assert.equal(again.rolls[0]._total, 6);
+  } finally {
+    globalThis.Roll = savedRoll;
+    game.combat = null;
+  }
 });

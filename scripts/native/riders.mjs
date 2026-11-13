@@ -7,7 +7,11 @@
 //             carries this caster's mark (an effect that came from the item);
 //   chosen  — Sneak Attack (finesse or ranged weapon, once per turn in combat),
 //             Divine Smite (melee weapon or unarmed strike; its fiend / undead
-//             version against those): offered as checkboxes.
+//             version against those), Divine Strike and Primal Strike (weapon
+//             hit, once per turn, their damage type picked) and Colossus Slayer
+//             (a target missing Hit Points, once per turn, the weapon's damage
+//             type): offered as checkboxes.
+// Savage Attacker (applySavageAttacker, below) rolls a weapon hit's dice twice.
 // Each rider's own damage activity rolls its dice — as critical damage on a
 // critical hit — and they join the hit's damage card, so the damage tray and the
 // attack automation apply them as part of the same hit (one instance of damage).
@@ -74,8 +78,59 @@ export const RIDERS = {
     activities: () => [],
     roll: lifedrinkerDamage,
     after: lifedrinkerHeal
+  },
+  // Blessed Strikes / Elemental Fury (2024 Cleric 7, Druid 7): once per turn on a weapon hit, its type chosen;
+  // the improved dice from Cleric 14 / Druid 15.
+  "divine-strike": {
+    mode: "choose", checked: true, oncePerTurn: true,
+    eligible: ({ activity }) => isWeaponAttack(activity),
+    activities: improvedStrike("cleric", 14), damageType: ["radiant", "necrotic"]
+  },
+  "primal-strike": {
+    mode: "choose", checked: true, oncePerTurn: true,
+    eligible: ({ activity }) => isWeaponAttack(activity),
+    activities: improvedStrike("druid", 15), damageType: ["cold", "fire", "lightning", "thunder"]
+  },
+  // Hunter's Prey (2024 Hunter Ranger 3), Colossus Slayer: once per turn, a weapon hit on a creature missing
+  // any of its Hit Points; the weapon's damage type. (Horde Breaker is an extra attack, not damage.)
+  "hunters-prey": {
+    mode: "choose", checked: true, oncePerTurn: true,
+    eligible: ({ activity, targets }) => isWeaponAttack(activity) && targets.some(missingHP),
+    activities: (item) => damageActivities(item).filter(a => /colossus/i.test(a.name ?? "")).slice(0, 1), damageType: "weapon"
   }
 };
+
+/** Divine / Primal Strike: the improved activity from this class level, else the base one. */
+function improvedStrike(classId, level) {
+  return (item) => {
+    const all = damageActivities(item);
+    const improved = all.find(a => /improved/i.test(a.name ?? ""));
+    const base = all.find(a => a !== improved) ?? improved;
+    const levels = Number(item.actor?.classes?.[classId]?.system?.levels ?? 0) || 0;
+    return [levels >= level && improved ? improved : base].filter(Boolean);
+  };
+}
+
+/** Whether a creature is missing any of its Hit Points. */
+function missingHP(actor) {
+  const hp = actor?.system?.attributes?.hp;
+  const max = Number(hp?.effectiveMax ?? hp?.max);
+  return Number.isFinite(max) && Number(hp?.value) < max;
+}
+
+/**
+ * The damage type a rider's dice deal: one it names, the weapon's ("weapon": the hit's own damage roll), or
+ * the attacker's pick of several. Null when the rider leaves its activity's own type.
+ */
+async function riderDamageType(choice, message) {
+  const want = choice.rider.damageType;
+  if (want === "weapon") return message?.rolls?.[0]?.options?.type ?? null;
+  if (!Array.isArray(want) || !want.length) return null;
+  if (want.length === 1) return want[0];
+  const label = (t) => game.i18n.localize(CONFIG.DND5E?.damageTypes?.[t]?.label ?? t);
+  const picked = await promptChoice(choice.item.name, "<p>Which damage type?</p>", want.map(t => ({ action: t, label: label(t) })));
+  return want.includes(picked) ? picked : want[0];
+}
 
 /** Eldritch Smite: offer to knock each Huge or smaller creature hit Prone. */
 async function smiteProne(choice, { hits }) {
@@ -298,12 +353,14 @@ export async function addOnHitRiders(message, activity, card) {
       rolls.push(...riderRolls);
       if (riderRolls.length) added.push({ name: choice.item.name, formula: riderRolls.map(r => r.formula).join(" + "), total: riderRolls.reduce((s, r) => s + r.total, 0) });
     }
+    const type = choice.activities.length ? await riderDamageType(choice, message) : null;
     for (const [index, base] of choice.activities.entries()) {
       // Only the first activity is used (spends the resource); the rest just roll.
       const act = index === 0 ? await riderActivity(choice, base) : base;
       if (!act) break;
       const riderRolls = await act.rollDamage({ isCritical, ...NO_DIALOG }, { configure: false }, { create: false });
       if (!riderRolls?.length) continue;
+      if (type) for (const r of riderRolls) Object.assign(r.options, { type, types: [type] });
       for (const r of riderRolls) await showRollToAdd(r);
       rolls.push(...riderRolls);
       added.push({ name: choice.item.name, formula: riderRolls.map(r => r.formula).join(" + "), total: riderRolls.reduce((s, r) => s + r.total, 0) });
@@ -325,4 +382,47 @@ export async function addOnHitRiders(message, activity, card) {
     if (entry) entry.note = notes.join("; ");
   }
   if (added.some(a => a.note)) await message.setFlag(MODULE_ID, RIDERS_FLAG, added);
+}
+
+// ── Savage Attacker ───────────────────────────────────────────────────────────
+
+export const SAVAGE_FLAG = "savageAttacker"; // on the damage card: { first, second, kept }
+
+/**
+ * Savage Attacker (feat), under the "onHitRiders" setting: once per turn, when a weapon hit's damage is
+ * rolled, its weapon damage dice (the hit's own damage roll) are rolled again and the higher total is used.
+ * There's no reason to keep the lower, so nothing is asked; the card notes both.
+ */
+export async function applySavageAttacker(message, activity) {
+  const actor = activity?.actor;
+  if (!isOnHitRidersEnabled() || !actor?.isOwner || !message || message.getFlag?.(MODULE_ID, SAVAGE_FLAG)) return;
+  if (!isWeaponAttack(activity) || !actor.items?.find?.(i => i.system?.identifier === "savage-attacker")) return;
+  const turn = turnKey(), key = `${actor.uuid}:savage-attacker`;
+  if (turn && usedThisTurn.get(key) === turn) return;
+  const roll = message.rolls?.[0];
+  if (!(roll instanceof CONFIG.Dice.DamageRoll) || roll.options?.ldaLuckDice) return;
+  const dice = (roll.dice ?? []).flatMap((term, termIndex) => (term.results ?? [])
+    .map((result, resultIndex) => ({ termIndex, resultIndex, faces: term.faces, value: result.result, active: result.active !== false && !result.rerolled })))
+    .filter(d => d.active);
+  if (!dice.length) return;
+  if (turn) usedThisTurn.set(key, turn);
+  const again = await new Roll(dice.map(d => `1d${d.faces}`).join(" + ")).evaluate();
+  await showRollToAdd(again);
+  const newValues = again.dice.map(d => d.total);
+  const first = dice.reduce((s, d) => s + d.value, 0), second = newValues.reduce((s, v) => s + v, 0);
+  const kept = second > first ? "second" : "first";
+  const update = { [`flags.${MODULE_ID}.${SAVAGE_FLAG}`]: { first, second, kept } };
+  if (kept === "second") {
+    const copies = message.rolls.map(r => (typeof r?.toJSON === "function" && r.constructor?.fromData) ? r.constructor.fromData(r.toJSON()) : r);
+    const copy = copies[0];
+    dice.forEach((d, n) => {
+      const term = copy.dice[d.termIndex];
+      Object.assign(term.results[d.resultIndex], { active: false, rerolled: true });
+      term.results.push({ result: newValues[n], active: true });
+    });
+    if (typeof copy._evaluateTotal === "function") copy._total = copy._evaluateTotal();
+    update.rolls = copies;
+  }
+  await message.update(update);
+  console.log(`[${MODULE_ID}] savage attacker: ${actor.name} rolled the weapon dice again (${first} / ${second}) — kept the ${kept}`);
 }

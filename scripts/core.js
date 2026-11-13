@@ -670,6 +670,8 @@ Hooks.once("init", () => {
           "in sight), Reckless Attack, Faerie Fire, Guiding Bolt and Heavy weapons. And the attack feats: Crossbow " +
           "Expert, Gunner, Sharpshooter and Spell Sniper (range, enemies within 5 ft); Spell Sniper and Sharpshooter " +
           "ignore half and three-quarters cover (taken off the target's AC); 2024 Crossbow Expert's off-hand crossbow damage. " +
+          "And the fighting styles: Two-Weapon Fighting (the ability modifier on off-hand damage) and Great Weapon Fighting " +
+          "(two-handed melee damage dice: 1s and 2s count as 3s; 2014: rerolled once). " +
           "Shown in the roll window and on the card. With Automated Conditions 5e active, the checks it performs are " +
           "left to it, except where its feats differ from the rules (Gunner, 2024 Crossbow Expert).",
     scope: "world",
@@ -884,8 +886,10 @@ Hooks.once("init", () => {
   game.settings.register(MODULE_ID, "onHitRiders", {
     name: "On-Hit Riders",
     hint: "When a hit's damage is rolled, add the attacker's riders to it: Hunter's Mark and Hex automatically when " +
-          "the target carries the caster's mark; Sneak Attack (finesse or ranged weapon, once per turn) and Divine Smite " +
-          "(melee hit) as a choice. Their dice double on a critical hit and apply with the hit.",
+          "the target carries the caster's mark; Sneak Attack (finesse or ranged weapon, once per turn), Divine Smite " +
+          "(melee hit), Divine Strike and Primal Strike (weapon hit, once per turn, their damage type chosen) and Colossus " +
+          "Slayer (a target missing Hit Points, once per turn) as a choice. Their dice double on a critical hit and apply " +
+          "with the hit. Savage Attacker: once per turn, a weapon hit's damage dice are rolled twice and the higher used.",
     scope: "world",
     config: true,
     type: Boolean,
