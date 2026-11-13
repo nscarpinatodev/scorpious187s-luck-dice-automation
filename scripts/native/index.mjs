@@ -23,6 +23,7 @@ import { applyMasteryGM, onPreRollDamageCleave } from "./mastery.mjs";
 import { onDisengageUsed, onTurnEndDisengage, onPreMoveTokenOA } from "./opportunity.mjs";
 import { recordAgathys, onActorUpdatedAgathys, retaliateGM } from "./retaliation.mjs";
 import { onTurnStartDeathSave, onPreApplyDamage, onDamageAppliedDeath, onPostRollDeathSave } from "./deathsaves.mjs";
+import { onPreApplyDamageRelentless, onDamageAppliedRelentless, onRestRelentless } from "./barbarian.mjs";
 import { rememberAreas, clearAreaGM, tagAreaGM, onPreDeleteRegion, onConcentrationEnded } from "./areas.mjs";
 import { onTurnStartSummary } from "./turn-summary.mjs";
 import { recordWallSpell, buildWallsGM, onRegionDeletedWalls, onPreUseActivityWalls, onPreRollAttackWalls } from "./walls.mjs";
@@ -181,8 +182,14 @@ Hooks.once("ready", () => {
   Hooks.on("updateActor", (actor, changes) =>
     onActorUpdatedAgathys(actor, changes).catch(err => console.error(`[${MODULE_ID}] armor of agathys:`, err)));
   Hooks.on("dnd5e.preApplyDamage", onPreApplyDamage); // synchronous; never cancels
+  Hooks.on("dnd5e.preApplyDamage", onPreApplyDamageRelentless); // after the death saves' (massive damage); never cancels
   Hooks.on("dnd5e.applyDamage", (actor) => onDamageAppliedDeath(actor).catch(err => console.error(`[${MODULE_ID}] death:`, err)));
-  Hooks.on("dnd5e.applyDamage", (actor) => onDamageAppliedGift(actor).catch(err => console.error(`[${MODULE_ID}] gift of the protectors:`, err)));
+  // Relentless Rage first: a barbarian back on its feet doesn't need Gift of the Protectors.
+  Hooks.on("dnd5e.applyDamage", (actor) => onDamageAppliedRelentless(actor)
+    .catch(err => console.error(`[${MODULE_ID}] relentless rage:`, err))
+    .then(() => onDamageAppliedGift(actor))
+    .catch(err => console.error(`[${MODULE_ID}] gift of the protectors:`, err)));
+  Hooks.on("dnd5e.restCompleted", (actor) => onRestRelentless(actor).catch(err => console.error(`[${MODULE_ID}] relentless rage:`, err)));
   Hooks.on("combatTurnChange", (combat, prior, current) =>
     onTurnStartCloak(combat, current).catch(err => console.error(`[${MODULE_ID}] cloak of flies:`, err)));
   Hooks.on("dnd5e.postRollDeathSave", onPostRollDeathSave);

@@ -155,7 +155,7 @@ export function sourceActor(effect) {
 }
 
 /** Active effects on an actor that came from an item with this identifier. */
-function effectsFrom(actor, identifier) {
+export function effectsFrom(actor, identifier) {
   return [...(actor?.effects ?? [])].filter(e => !e.disabled && !e.isSuppressed && sourceItem(e)?.system?.identifier === identifier);
 }
 

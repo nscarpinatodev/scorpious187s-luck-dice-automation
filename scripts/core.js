@@ -785,7 +785,8 @@ Hooks.once("init", () => {
   nativeToggle("deathSaves", "Death Saves",
     "Roll a dying character's death save at the start of its turn (on its player's client). Damage at 0 HP is a failed death " +
     "save (two on a critical hit); damage at or past the HP maximum — or massive damage — is death. Luck Dice that turn a " +
-    "death save around are recorded properly.");
+    "death save around are recorded properly. Relentless Rage: a raging barbarian dropped to 0 HP makes its Constitution " +
+    "save (DC 10, +5 per use until a rest) and on a success is back at twice its Barbarian level in HP (2014: 1).");
   nativeToggle("clearInstantAreas", "Clear Spell Areas",
     "Remove an instantaneous spell's placed area once the automation has resolved it (left to Flash Rolls 5e when its Remove " +
     "Template option is on), and a concentration spell's area when its concentration ends. Lingering and wall spells' areas " +
