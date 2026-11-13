@@ -310,6 +310,16 @@ export function claimRiderUse(activity, usageConfig) {
   return true;
 }
 
+/**
+ * Use an activity through dnd5e (spending what it spends, posting its card), with neither dnd5e's follow-up
+ * nor this module's save automation for it (claimRiderUse claims the use). Resolves with dnd5e's results, or null.
+ */
+export async function useClaimed(activity, usage = {}, dialog = {}) {
+  pendingRiderUses.set(activity.item.id, () => {});
+  try { return (await activity.use({ subsequentActions: true, ...usage }, dialog, {})) ?? null; }
+  finally { pendingRiderUses.delete(activity.item.id); }
+}
+
 /** The activity to roll for a rider: as is, or after using it through dnd5e. Null if the use was cancelled. */
 async function riderActivity(choice, activity) {
   if (!spendsSomething(choice)) {

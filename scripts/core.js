@@ -889,7 +889,9 @@ Hooks.once("init", () => {
           "the target carries the caster's mark; Sneak Attack (finesse or ranged weapon, once per turn), Divine Smite " +
           "(melee hit), Divine Strike and Primal Strike (weapon hit, once per turn, their damage type chosen) and Colossus " +
           "Slayer (a target missing Hit Points, once per turn) as a choice. Their dice double on a critical hit and apply " +
-          "with the hit. Savage Attacker: once per turn, a weapon hit's damage dice are rolled twice and the higher used.",
+          "with the hit. Savage Attacker: once per turn, a weapon hit's damage dice are rolled twice and the higher used. " +
+          "Stunning Strike: after a Monk weapon or Unarmed Strike hit, offer to spend a Focus Point; the save is rolled by " +
+          "the save automation (Full: Stunned on a failure; Speed halved and Advantage on the next attack against it on a success).",
     scope: "world",
     config: true,
     type: Boolean,

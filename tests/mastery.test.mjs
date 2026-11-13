@@ -215,6 +215,18 @@ test("Sap and Vex in the advantage checks, used up by the attack", () => {
   assert.deepEqual(vexed.consume, ["E.vex"]);
 });
 
+test("Stunning Strike's mark: the next attack against that creature, by anyone, has Advantage, and uses it up", () => {
+  settings.attackAdvantage = true;
+  const rogue = creature("Rogue", 0, 0, { disposition: 1 });
+  const orc = creature("Orc", 1, 0);
+  orc.actor.effects.push({ uuid: "E.exposed", disabled: false, getFlag: (m, k) => m === MODULE_ID && k === MASTERY_FLAG ? { kind: "stunning-strike", target: orc.doc.uuid } : undefined });
+  canvas.tokens.setTargets([orc.token.id]);
+  const reasons = attackReasons({ type: "attack", actor: rogue.actor, item: { type: "weapon", system: { range: {}, properties: new Set(), type: {} } },
+    attack: { type: { value: "melee", classification: "weapon" } }, getUsageToken: () => rogue.doc });
+  assert.ok(reasons.advantage.includes("Stunning Strike"));
+  assert.deepEqual(reasons.consume, ["E.exposed"]);
+});
+
 // ── Automatic critical hits ──
 test("auto-crit: damage against Paralyzed / Unconscious targets from within 5 ft; left to AC5E when it automates statuses", () => {
   settings.autoCrits = true;

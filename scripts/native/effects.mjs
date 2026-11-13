@@ -3,6 +3,7 @@
 
 import { isPrivateGMCard, playerTargets, recordOutcome, outcomeTitle } from "./outcome.mjs";
 import { doubledDuration, METAMAGIC_FLAG } from "./metamagic.mjs";
+import { rulesOf } from "./advantage.mjs";
 import { MODULE_ID, getPrivateRollOutcome, isEffectAutomationEnabled, socket, getPrimaryGM, resolveTarget, APPLIED_EFFECTS_FLAG, antimagicStops } from "./shared.mjs";
 
 // ── Effect automation ─────────────────────────────────────────────────────────
@@ -133,6 +134,18 @@ export async function applyHitEffects(attackMessage, activity) {
 }
 
 /**
+ * Whether a save activity's effect goes to a creature that passed (or failed) its save: on a failure every
+ * effect, on a success the ones marked "apply on a successful save". 2024 Stunning Strike (monk.mjs): Stunned
+ * on a failure, the rest (Slowed) on a success — dnd5e's data marks both for a failure.
+ */
+export function saveEffectApplies(activity, effect, passed) {
+  if (activity?.item?.system?.identifier === "stunning-strike" && rulesOf(activity.item) !== "2014") {
+    return effect.statuses?.has?.("stunned") ? !passed : passed;
+  }
+  return !passed || (activity?.effects ?? []).some(profile => profile.onSave && profile._id === effect.id);
+}
+
+/**
  * Saves (Save Automation "Full", once every save is in): a failed save gets every
  * effect; a successful one only the effects the activity marks "apply on a
  * successful save". Targets without a save result get nothing.
@@ -141,11 +154,10 @@ export async function applySaveEffects(activity, usage, targets, outcome) {
   if (!isEffectAutomationEnabled() || !usage?.system?.getEffects) return;
   const effects = await usage.system.getEffects();
   if (!effects.length) return;
-  const onSave = new Set((activity.effects ?? []).filter(profile => profile.onSave).map(profile => profile._id));
   const list = targets.map(target => {
     const result = outcome.get(target.token);
     if (!result) return null;
-    const effectIds = effects.filter(e => !result.passed || onSave.has(e.id)).map(e => e.id);
+    const effectIds = effects.filter(e => saveEffectApplies(activity, e, !!result.passed)).map(e => e.id);
     return effectIds.length ? { ...target, effectIds } : null;
   }).filter(Boolean);
   await requestApplyEffects(usage, list);

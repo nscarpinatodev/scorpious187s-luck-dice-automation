@@ -393,7 +393,10 @@ export function attackReasons(activity, config = {}) {
   return { advantage, disadvantage, cancel, consume, ignored, dropAc5e, coverIgnored };
 }
 
-/** Weapon Mastery marks (mastery.mjs): Sap on the attacker, Vex against this target. Used up by the attack. */
+/**
+ * Weapon Mastery marks (mastery.mjs): Sap on the attacker, Vex against this target; and Stunning Strike's
+ * (monk.mjs) on the target — the next attack against it, by anyone, has Advantage. Used up by the attack.
+ */
 function addMasteryReasons(fx, { advantage, disadvantage, consume }) {
   const masteryOf = (effect) => effect.disabled ? null : effect.getFlag?.(MODULE_ID, MASTERY_FLAG);
   const effects = [...(fx.actor?.effects ?? [])];
@@ -401,6 +404,8 @@ function addMasteryReasons(fx, { advantage, disadvantage, consume }) {
   if (sapped) { disadvantage.push("Sapped"); consume.push(sapped.uuid); }
   const vexing = fx.target ? effects.find(e => masteryOf(e)?.kind === "vex" && masteryOf(e).target === fx.target.uuid) : null;
   if (vexing) { advantage.push("Vex"); consume.push(vexing.uuid); }
+  const exposed = fx.target ? [...(fx.target.actor?.effects ?? [])].find(e => masteryOf(e)?.kind === "stunning-strike") : null;
+  if (exposed) { advantage.push("Stunning Strike"); consume.push(exposed.uuid); }
 }
 
 /** Only the Weapon Mastery reasons (when the advantage setting is off but Weapon Mastery is on). */
@@ -622,12 +627,12 @@ export async function consumeAttackMarks(message) {
   }
 }
 
-/** GM side: remove a mark an attack used up — only marks this module consumes (Guiding Bolt, Sap, Vex). */
+/** GM side: remove a mark an attack used up — only marks this module consumes (Guiding Bolt, Sap, Vex, Stunning Strike). */
 export async function consumeAttackMarkGM({ uuid }) {
   const effect = await fromUuid(uuid);
   if (!effect) return;
   const mastery = effect.getFlag?.(MODULE_ID, MASTERY_FLAG)?.kind;
-  if (sourceItem(effect)?.system?.identifier === "guiding-bolt" || mastery === "sap" || mastery === "vex") await effect.delete();
+  if (sourceItem(effect)?.system?.identifier === "guiding-bolt" || ["sap", "vex", "stunning-strike"].includes(mastery)) await effect.delete();
 }
 
 /**

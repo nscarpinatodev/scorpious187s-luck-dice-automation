@@ -197,7 +197,8 @@ export function saveOf(activity) {
 /**
  * The saves for a save activity's targets, per the save automation mode: request
  * them (players prompted, NPCs by the GM), or in full mode wait for them, then
- * roll and apply the damage and effects. Also used by lingering areas.
+ * roll and apply the damage and effects. Also used by lingering areas and Stunning Strike. Full mode
+ * resolves with the outcomes (token uuid → { passed, total }); the other modes with nothing.
  * `usage` is the use's card (links the saves; its effects are applied), or null.
  */
 export async function automateSaves(activity, targets, usage, mode = getSaveAutomation()) {
@@ -258,6 +259,7 @@ export async function automateSaves(activity, targets, usage, mode = getSaveAuto
   await applySaveDamage(activity, everyone, outcome, usage);
   if (usage) await applySaveEffects(activity, usage, everyone, outcome);
   if (usage) await clearAreasForUse(usage.id);
+  return outcome;
 }
 
 /**
