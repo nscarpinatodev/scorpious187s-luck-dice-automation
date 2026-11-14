@@ -15,10 +15,11 @@
 //          the counterspeller's spellcasting ability check against DC 10 + its level (Luck Dice
 //          on a failure). Countered: the spell fails, and its slot is still spent.
 // A countered spell's use stops there (whatever cast it gets nothing back, as when its window is
-// cancelled), and a card says what happened. Reaction spells cast from the module's own reaction
-// prompts (Shield, Counterspell itself…) aren't offered: the prompt that asked for them is waiting.
+// cancelled), and a card says what happened. Reaction spells cast from the module's own prompts
+// (Shield, Silvery Barbs, Counterspell itself) can be countered too: the client that asked for them
+// is told to wait longer (reactions.mjs's noteBusy) while it plays out.
 
-import { askReaction, hasReaction, spendReaction, asksFor } from "./reactions.mjs";
+import { askReaction, hasReaction, spendReaction, asksFor, noteBusy, holdReaction } from "./reactions.mjs";
 import { tokenDistance, hasLineOfSight, rulesOf } from "./advantage.mjs";
 import { useClaimed } from "./riders.mjs";
 import { requestSaves, saveOf } from "./saves.mjs";
@@ -80,7 +81,7 @@ export async function checkCounterspell(activity, usageConfig = {}) {
       casterName: casterDoc.name, spellName: activity.item.name, level
     });
     if (answer?.identifier !== "counterspell") continue;
-    last = answer;
+    last = { ...answer, level };
     if (answer.countered) break;
   }
   return last;
@@ -98,6 +99,16 @@ export async function answerCounterspell(payload) {
      (${level ? `level ${level}` : "a cantrip"}). Use ${escapeHTML(name)}'s reaction to cast Counterspell?</p>`,
     [{ action: "counter", label: "Counterspell" }, { action: "none", label: "No Reaction" }]);
   if (choice !== "counter" || !hasReaction(actor)) return null;
+  noteBusy(payload); // the cast, a Counterspell against it, and the save or check take a while
+  // Spoken for until it's resolved: a Counterspell against this one mustn't ask this creature again.
+  const release = holdReaction(actor);
+  try { return await castCounterspell(actor, tokenDoc, item, payload); }
+  finally { release(); }
+}
+
+/** Cast the Counterspell at the caster and resolve it (answerCounterspell, with the reaction held). */
+async function castCounterspell(actor, tokenDoc, item, { casterToken, casterActor: casterActorUuid, casterName, level = 0 }) {
+  const name = tokenDoc?.name ?? actor.name;
 
   const rules = rulesOf(item);
   const activity = activitiesOf(item).find(a => isLike(a, rules === "2014" ? "check" : "save")) ?? activitiesOf(item)[0];
@@ -108,7 +119,7 @@ export async function answerCounterspell(payload) {
   const previous = [...(game.user?.targets ?? [])].map(t => t.id);
   if (casterDoc && canvas?.scene === casterDoc.parent) canvas.tokens?.setTargets?.([casterDoc.id], { mode: "replace" });
   let results;
-  try { results = await useClaimed(activity, { [MODULE_ID]: { noCounter: true } }, {}); }
+  try { results = await useClaimed(activity, {}, {}); } // a Counterspell can itself be countered
   finally { canvas?.tokens?.setTargets?.(previous, { mode: "replace" }); }
   if (!results) return null;
   await spendReaction(actor);
@@ -146,9 +157,11 @@ export async function answerCounterspell(payload) {
 /** The card for the result, from the caster. */
 async function postResult(activity, verdict) {
   const spell = escapeHTML(activity.item?.name ?? "The spell");
+  const cantrip = !verdict.level;
   const text = verdict.countered
     ? `<strong>${spell}</strong> is countered by ${escapeHTML(verdict.by)}'s Counterspell (${escapeHTML(verdict.how)}). ` +
-      (verdict.rules === "2014" ? "The spell fails and has no effect; its slot is spent." : "It dissipates with no effect; a spell slot isn't spent.")
+      (verdict.rules === "2014" ? `The spell fails and has no effect${cantrip ? "." : "; its slot is spent."}`
+        : `It dissipates with no effect${cantrip ? "." : "; a spell slot isn't spent."}`)
     : `${escapeHTML(verdict.by)}'s Counterspell fails (${escapeHTML(verdict.how)}): <strong>${spell}</strong> goes ahead.`;
   try {
     await (ChatMessage.implementation ?? ChatMessage).create({

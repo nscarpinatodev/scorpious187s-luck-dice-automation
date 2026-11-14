@@ -404,6 +404,10 @@ export function attackReasons(activity, config = {}) {
   return { advantage, disadvantage, cancel, consume, ignored, dropAc5e, coverIgnored, elusive };
 }
 
+/** Silvery Barbs' advantage mark on a creature (reactions.mjs), if it has one: its next attack, check or save. */
+export const silveryMark = (actor) => [...(actor?.effects ?? [])]
+  .find(e => !e.disabled && e.getFlag?.(MODULE_ID, MASTERY_FLAG)?.kind === "silvery-barbs") ?? null;
+
 /**
  * Weapon Mastery marks (mastery.mjs): Sap on the attacker, Vex against this target; Studied Attacks'
  * (fighter.mjs) against this target; and Stunning Strike's (monk.mjs) on the target — the next attack
@@ -418,6 +422,8 @@ function addMasteryReasons(fx, { advantage, disadvantage, consume }) {
   if (vexing) { advantage.push("Vex"); consume.push(vexing.uuid); }
   const studied = fx.target ? effects.find(e => masteryOf(e)?.kind === "studied-attacks" && masteryOf(e).target === fx.target.uuid) : null;
   if (studied) { advantage.push("Studied Attacks"); consume.push(studied.uuid); }
+  const barbs = silveryMark(fx.actor);
+  if (barbs) { advantage.push("Silvery Barbs"); consume.push(barbs.uuid); }
   const exposed = fx.target ? [...(fx.target.actor?.effects ?? [])].find(e => masteryOf(e)?.kind === "stunning-strike") : null;
   if (exposed) { advantage.push("Stunning Strike"); consume.push(exposed.uuid); }
 }
@@ -451,9 +457,10 @@ function heavyWeaponReason(fx) {
  */
 export function onPreRollAttack(config, dialog, message) {
   const full = isAttackAdvantageEnabled();
-  if (!full && !isWeaponMasteryEnabled()) return;
   const activity = config?.subject;
   if (!isLike(activity, "attack")) return;
+  // Without either setting, only a Silvery Barbs mark (Reaction Prompts) is read.
+  if (!full && !isWeaponMasteryEnabled() && !silveryMark(activity.actor)) return;
   let reasons;
   try { reasons = full ? attackReasons(activity, config) : masteryReasons(activity, config); }
   catch (err) { console.error(`[${MODULE_ID}] attack reasons:`, err); return; }
@@ -638,21 +645,35 @@ export function onRenderAttackDialog(app, element) {
 
 /** After the attack: use up marks spent on it (Guiding Bolt). The GM removes what the attacker can't. */
 export async function consumeAttackMarks(message) {
-  const uuids = message?.getFlag?.(MODULE_ID, ATTACK_REASONS_FLAG)?.consume ?? [];
-  for (const uuid of uuids) {
-    const effect = await fromUuid(uuid);
-    if (!effect) continue;
-    if (effect.isOwner) await effect.delete();
-    else socket?.emit("consumeAttackMark", { uuid });
+  return consumeMarks(message?.getFlag?.(MODULE_ID, ATTACK_REASONS_FLAG)?.consume);
+}
+
+/** After a save or check: use up marks spent on it (Silvery Barbs' advantage). */
+export async function consumeRollMarks(message) {
+  return consumeMarks(message?.getFlag?.(MODULE_ID, SAVE_REASONS_FLAG)?.consume);
+}
+
+// Marks being removed on this client: a roll can fire two post-roll hooks (a concentration save).
+const consuming = new Set();
+async function consumeMarks(uuids = []) {
+  for (const uuid of uuids ?? []) {
+    if (consuming.has(uuid)) continue;
+    consuming.add(uuid);
+    try {
+      const effect = await fromUuid(uuid);
+      if (!effect) continue;
+      if (effect.isOwner) await effect.delete().catch(() => null); // already gone
+      else socket?.emit("consumeAttackMark", { uuid });
+    } finally { consuming.delete(uuid); }
   }
 }
 
-/** GM side: remove a mark an attack used up — only marks this module consumes (Guiding Bolt, Sap, Vex, Studied Attacks, Stunning Strike). */
+/** GM side: remove a mark a roll used up — only marks this module consumes (Guiding Bolt, Sap, Vex, Studied Attacks, Stunning Strike, Silvery Barbs). */
 export async function consumeAttackMarkGM({ uuid }) {
   const effect = await fromUuid(uuid);
   if (!effect) return;
   const mastery = effect.getFlag?.(MODULE_ID, MASTERY_FLAG)?.kind;
-  if (sourceItem(effect)?.system?.identifier === "guiding-bolt" || ["sap", "vex", "studied-attacks", "stunning-strike"].includes(mastery)) await effect.delete();
+  if (sourceItem(effect)?.system?.identifier === "guiding-bolt" || ["sap", "vex", "studied-attacks", "stunning-strike", "silvery-barbs"].includes(mastery)) await effect.delete();
 }
 
 /**

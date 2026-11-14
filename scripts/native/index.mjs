@@ -35,9 +35,9 @@ import { rayCount, fireRays } from "./projectiles.mjs";
 import { claimRiderUse } from "./riders.mjs";
 import { recordLingeringArea, tagLingeringArea, onTurnChange, onTokenMoved, onRegionChanged } from "./lingering.mjs";
 import { onEffectCreated, onTurnEndRepeatSaves } from "./repeat-saves.mjs";
-import { answerReaction, pendingReactions, onTurnStartReaction, onCombatEndedReactions } from "./reactions.mjs";
-import { onPreRollAttack, onPreRollDamage, onPreRollDamageFeats, onRenderAttackDialog, consumeAttackMarks, consumeAttackMarkGM } from "./advantage.mjs";
-import { onPreRollSave, onRenderSaveDialog, installAutoFail } from "./save-rules.mjs";
+import { answerReaction, pendingReactions, extendReaction, onTurnStartReaction, onCombatEndedReactions } from "./reactions.mjs";
+import { onPreRollAttack, onPreRollDamage, onPreRollDamageFeats, onRenderAttackDialog, consumeAttackMarks, consumeRollMarks, consumeAttackMarkGM } from "./advantage.mjs";
+import { onPreRollSave, onPreRollCheck, onRenderSaveDialog, installAutoFail } from "./save-rules.mjs";
 import { installCounterspell } from "./counterspell.mjs";
 import { rollExtras, markBoostTargets, markBardicGM, consumeBoostGM, endBoostSpellGM } from "./boosts.mjs";
 import { onPreRollAttackInvocations, onPreRollDamageInvocations, onDamageAppliedGift, onTurnStartCloak, onMaddeningHexUsed } from "./invocations.mjs";
@@ -125,6 +125,11 @@ Hooks.once("ready", () => {
       reactionResult: (payload) => {
         if (payload?.to !== game.user.id) return;
         pendingReactions.get(payload.requestId)?.(payload.result ?? null);
+      },
+      // The creature asked has chosen and is still working on it (a spell's window, a Counterspell): wait longer.
+      reactionBusy: (payload) => {
+        if (payload?.to !== game.user.id) return;
+        extendReaction(payload.requestId);
       }
     }
   }) ?? null);
@@ -147,6 +152,7 @@ Hooks.once("ready", () => {
   Hooks.on("renderAttackRollConfigurationDialog", onRenderAttackDialog);
   // Saving throw rules (concentration saves too): advantage, Aura of Protection, automatic failures. Never cancels.
   Hooks.on("dnd5e.preRollSavingThrowV2", onPreRollSave);
+  Hooks.on("dnd5e.preRollAbilityCheckV2", onPreRollCheck); // Silvery Barbs' advantage on checks, skills and tools
   Hooks.on("renderD20RollConfigurationDialog", onRenderSaveDialog);
   // The last word on whether a roll shows its window (after every type-specific preRoll hook). Never cancels.
   Hooks.on("dnd5e.preRollV2", finalRollDialog);
@@ -221,8 +227,10 @@ Hooks.once("ready", () => {
   for (const [hook, test] of Object.entries(D20_TESTS)) {
     const handler = hook === "dnd5e.rollConcentrationV2" ? onConcentrationRolled
       : hook === "dnd5e.rollSavingThrow" ? onSaveRolled : onD20TestRolled;
-    Hooks.on(hook, (rolls, data) =>
-      trackPending(pendingLuckChecks, rolls?.[0]?.parent?.id, handler(rolls, data, test)));
+    Hooks.on(hook, (rolls, data) => {
+      consumeRollMarks(rolls?.[0]?.parent).catch(err => console.error(`[${MODULE_ID}] roll marks:`, err)); // Silvery Barbs' advantage
+      trackPending(pendingLuckChecks, rolls?.[0]?.parent?.id, handler(rolls, data, test));
+    });
   }
   // Save automation. Hooks.call: never return false here, that would cancel dnd5e's follow-ups.
   // Synchronous up to the point dnd5e reads usageConfig.subsequentActions, right after.

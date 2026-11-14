@@ -50,7 +50,8 @@ export async function onD20TestRolled(rolls, data, test) {
         .catch(err => { console.error(`[${MODULE_ID}] silvery barbs:`, err); return null; });
       if (!barbs) return;
       await recordCardStep(message, barbs.roll, barbs.before, {
-        kind: "check", label: `Silvery Barbs (${barbs.by}): rerolled, kept the lower`, total: Number(barbs.roll.total ?? 0),
+        kind: "check", label: `Silvery Barbs (${barbs.by}): rerolled, kept the lower${barbs.granted ? `; Advantage to ${barbs.granted}` : ""}`,
+        total: Number(barbs.roll.total ?? 0),
         detail: `d20: ${getKeptD20Result(barbs.roll) ?? "?"}`
       });
       roll = barbs.roll; total = Number(roll.total ?? 0); barbed = true;

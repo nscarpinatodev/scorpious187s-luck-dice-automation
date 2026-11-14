@@ -37,7 +37,7 @@ Your GM chooses which of these are on. The setting each one belongs to is in bra
 | **Your conditions** | Prone, Restrained or Blinded give disadvantage. Frightened gives disadvantage while you can see what frightened you. Invisible gives advantage. |
 | **Your target's conditions** | Advantage against a target that's Restrained, Blinded, Paralyzed, Stunned, Unconscious or Petrified. Against a Prone target: advantage within 5 ft, disadvantage farther away. Disadvantage against a target that's Invisible or Dodging. |
 | **Features and spells** | Reckless Attack (yours, or the target's), Faerie Fire, Guiding Bolt, and disadvantage with a Heavy weapon you're too small or too weak to wield well. |
-| **One-time marks** | Vex, Sap, Studied Attacks (after a Fighter misses a creature) and Stunning Strike's advantage. These apply to the next attack only and are used up by it. |
+| **One-time marks** | Vex, Sap, Studied Attacks (after a Fighter misses a creature), Stunning Strike's advantage and Silvery Barbs' advantage (which also works on your next check or save). These apply to the next attack only and are used up by it. |
 | **Elusive** | A Rogue with Elusive can't be attacked with advantage from any source, unless they're Incapacitated. The card lists the advantage that was ignored. |
 | **Cover** | Spell Sniper and Sharpshooter ignore half and three-quarters cover. The card shows the target's AC without the cover bonus. |
 
@@ -86,7 +86,7 @@ These don't change the roll ahead of time. They show up as a prompt or a card no
 | **A failed roll or a miss** | One prompt offers your Luck Dice, plus Bardic Inspiration, Guidance and Resistance (2014), Lucky, Indomitable, Protection of the Talisman and Seeking Spell, whichever you have. |
 | **After you hit** | Weapon Mastery effects (Topple, Sap, Vex, Slow, Push, Cleave) and Stunning Strike. Graze applies on a miss. |
 | **When you're hit** | Your reactions: Shield, Parry, Uncanny Dodge, Deflect Attacks, Superior Hunter's Defense and the others you have. The prompt goes to you, not the attacker. If you have the Lucky feat, you can also spend a point to make the attacker reroll. |
-| **When you succeed on a save or check** | An enemy within 60 ft who can see you may cast Silvery Barbs: you reroll and keep the lower. If that turns it into a failure, your Luck Dice prompt follows as usual. |
+| **When you succeed on a save or check** | An enemy within 60 ft who can see you may cast Silvery Barbs: you reroll and keep the lower. If that turns it into a failure, your Luck Dice prompt follows as usual. Whoever cast it then picks a creature to have advantage on its next attack, check or save within a minute. |
 | **When you cast a spell** | An enemy within 60 ft who can see you may cast Counterspell. With the 2024 spell you make a Constitution save, and on a failure the spell fizzles without spending its slot. With the 2014 spell it's countered outright up to the Counterspell's level, otherwise the counterspeller makes a spellcasting ability check; a countered spell's slot is still spent. Spells cast with Subtle Spell can't be countered. |
 | **When saves are settled** | Evasion, Careful Spell, Heightened Spell and Sculpt Spells change the outcome or the damage. An evoker's spell with allies caught in it asks the wizard which creatures to shape it around. |
 | **When damage lands** | Death-save failures from damage at 0 HP, massive damage, Relentless Rage, and Gift of the Protectors. |

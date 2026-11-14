@@ -26,7 +26,7 @@
 // the save automation's damage (saves.mjs). A save folded into its spell's card (dnd5e's summary)
 // shows its reasons there (cards.mjs).
 
-import { ac5eCovers, tokenDistance, rulesOf, mergeRollMode, ensureFinalModeHook, reasonsHTML, SAVE_REASONS_FLAG } from "./advantage.mjs";
+import { ac5eCovers, tokenDistance, rulesOf, mergeRollMode, ensureFinalModeHook, reasonsHTML, silveryMark, SAVE_REASONS_FLAG } from "./advantage.mjs";
 import { MODULE_ID, debug, escapeHTML, isSaveRulesEnabled } from "./shared.mjs";
 
 export { SAVE_REASONS_FLAG };
@@ -159,12 +159,17 @@ function saverToken(actor, message) {
  * Never cancels.
  */
 export function onPreRollSave(config, dialog, message) {
-  if (!isSaveRulesEnabled()) return;
   const actor = config?.subject;
+  const rules = isSaveRulesEnabled(), barbs = silveryMark(actor);
+  // Without Saving Throw Rules, only a Silvery Barbs mark (Reaction Prompts) is read.
+  if (!rules && !barbs) return;
   if (!actor?.system?.abilities || !config.ability) return;
   let reasons;
-  try { reasons = saveReasons(actor, config.ability, saveSource(message), { tokenDoc: saverToken(actor, message) }); }
-  catch (err) { console.error(`[${MODULE_ID}] save rules:`, err); return; }
+  try {
+    reasons = rules ? saveReasons(actor, config.ability, saveSource(message), { tokenDoc: saverToken(actor, message) })
+      : { advantage: [], disadvantage: [], autoFail: null, autoFailBy: null, bonuses: [] };
+  } catch (err) { console.error(`[${MODULE_ID}] save rules:`, err); return; }
+  if (barbs) { reasons.advantage.push("Silvery Barbs"); reasons.consume = [barbs.uuid]; }
   // Reasons an earlier hook noted on this roll (2024 Extended Spell's, on a concentration save) stay with these.
   const prior = foundry.utils.getProperty(message ?? {}, `data.flags.${MODULE_ID}.${SAVE_REASONS_FLAG}`);
   if (prior?.advantage?.length) reasons.advantage = [...prior.advantage, ...reasons.advantage];
@@ -194,6 +199,20 @@ export function onPreRollSave(config, dialog, message) {
   if (message) foundry.utils.setProperty(message, `data.flags.${MODULE_ID}.${SAVE_REASONS_FLAG}`, reasons);
   debug(`save rules: ${actor.name} ${config.ability} — ${autoFail ? `fails (${autoFail}) ` : ""}+[${advantage.join(", ")}] −[${disadvantage.join(", ")}]${
     bonuses.length ? ` ${bonuses.map(b => `${b.label} +${b.value}`).join(", ")}` : ""}`);
+}
+
+/**
+ * dnd5e.preRollAbilityCheckV2 (ability, skill and tool checks): Silvery Barbs' advantage, merged with the roll's
+ * other sources and noted for the window and the card; used up once it's rolled (consumeRollMarks). Not initiative.
+ */
+export function onPreRollCheck(config, dialog, message) {
+  const barbs = silveryMark(config?.subject);
+  if (!barbs || config?.hookNames?.includes?.("initiativeDialog")) return;
+  const reasons = { advantage: ["Silvery Barbs"], disadvantage: [], autoFail: null, bonuses: [], consume: [barbs.uuid] };
+  reasons.finalMode = mergeRollMode(config, dialog, reasons);
+  ensureFinalModeHook();
+  if (message) foundry.utils.setProperty(message, `data.flags.${MODULE_ID}.${SAVE_REASONS_FLAG}`, reasons);
+  debug(`silvery barbs: ${config.subject?.name}'s check with advantage`);
 }
 
 /** Whether a roll fails automatically (save-rules' note on it). */

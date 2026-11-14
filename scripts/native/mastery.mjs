@@ -98,7 +98,7 @@ export async function applyMasteryGM(change) {
     if (tokenDoc && Number.isFinite(change.x) && Number.isFinite(change.y)) await tokenDoc.update({ x: change.x, y: change.y }, { [MODULE_ID]: { forced: true } });
     return;
   }
-  if (["sap", "slow", "vex", "lethargy", "stunning-strike", "studied-attacks"].includes(change.kind) && change.effect?.flags?.[MODULE_ID]?.[MASTERY_FLAG]?.kind === change.kind) {
+  if (["sap", "slow", "vex", "lethargy", "stunning-strike", "studied-attacks", "silvery-barbs"].includes(change.kind) && change.effect?.flags?.[MODULE_ID]?.[MASTERY_FLAG]?.kind === change.kind) {
     await actor.createEmbeddedDocuments("ActiveEffect", [change.effect]);
   }
 }

@@ -13,7 +13,11 @@
 //                         can see it: subtract a Bardic Inspiration die when that
 //                         could turn the hit into a miss;
 //     Silvery Barbs     — the same allies: the attacker rerolls, keeping the lower
-//                         (a critical hit too: the new d20 decides);
+//                         (a critical hit too: the new d20 decides); then its caster
+//                         picks a creature it can see within 60 ft (itself, if it likes)
+//                         for Advantage on its next attack roll, ability check or save
+//                         within a minute (a mark the attack / save / check rules read
+//                         and use up: advantage.mjs, save-rules.mjs);
 //   on a success (the roller's client, checks.mjs): a save, ability check, skill or
 //   tool check that beats its DC —
 //     Silvery Barbs     — the roller's enemies within 60 ft who can see it: it
@@ -51,7 +55,8 @@ import { requestApplyEffects } from "./effects.mjs";
 import { tokenDistance, hasLineOfSight, cantTakeReactions, rulesOf } from "./advantage.mjs";
 import { bardicDie, luckyFeat, usesLeft, useLuckyAgainst, withExtraD20, spendUses } from "./boosts.mjs";
 import { answerGift, dealInvocationDamage } from "./invocations.mjs";
-import { applyMasteryChange, pushDestination } from "./mastery.mjs";
+import { applyMasteryChange, pushDestination, masteryEffect } from "./mastery.mjs";
+import { pickCreatures } from "./targeting.mjs";
 import { isTriggerClient } from "./lingering.mjs";
 import { answerOpportunity } from "./opportunity.mjs";
 import { answerWallSide } from "./walls.mjs";
@@ -63,7 +68,10 @@ import {
 } from "./shared.mjs";
 
 export const REACTIONS_FLAG = "reactions";
+export const SILVERY = "silvery-barbs"; // Silvery Barbs' advantage mark (a mastery-style effect)
 const RESPONSE_TIMEOUT = 60_000;
+// Once the creature has chosen (its spell's window, a Counterspell against it, the rolls after): this long.
+const BUSY_TIMEOUT = 300_000;
 const ELEMENTS = ["acid", "cold", "fire", "lightning", "thunder"];
 const INCAPACITATING = ["incapacitated", "paralyzed", "petrified", "stunned", "unconscious", "dead"];
 const finite = (n) => Number.isFinite(n);
@@ -196,9 +204,20 @@ Hooks.once("init", () => {
 
 // Creatures whose reaction is being spent on this client, until the status lands (by actor uuid).
 const spending = new Set();
+// Creatures part-way through a reaction that takes a while (a Counterspell being cast and resolved), by actor
+// uuid: it's already spoken for, so nothing it sets off — a Counterspell against it — can ask it again.
+const held = new Set();
 // dnd5e 6.1's stock No Reactions effect (shared.mjs) takes it away too, as does a 2014 Shocking Grasp (advantage.mjs).
 export const hasReaction = (actor) => !!actor && !actor.statuses?.has?.(REACTION_USED) && !spending.has(actor.uuid)
-  && !hasStockEffect(actor, "noReactions") && !cantTakeReactions(actor);
+  && !held.has(actor.uuid) && !hasStockEffect(actor, "noReactions") && !cantTakeReactions(actor);
+
+/** Hold a creature's reaction while it plays out. Returns the function that lets it go. */
+export function holdReaction(actor) {
+  const uuid = actor?.uuid;
+  if (!uuid) return () => {};
+  held.add(uuid);
+  return () => held.delete(uuid);
+}
 
 /** A creature uses its reaction: the status, on its owner's client. Outside combat there are no turns to track it by. */
 export async function spendReaction(actor) {
@@ -231,10 +250,9 @@ async function useReaction(item, actor, tokenDoc, { aim } = {}) {
   if (!activity?.use) return null;
   if (aim && canvas?.scene === aim.parent) canvas.tokens?.setTargets([aim.id], { mode: "replace" });
   const spell = item.type === "spell";
-  // A reaction spell cast from these prompts isn't offered to Counterspell (counterspell.mjs): the prompt that
-  // asked for it is still waiting on its answer.
+  // A spell can be counterspelled (counterspell.mjs): the prompt that asked for it was told to wait (noteBusy).
   const results = spell
-    ? await activity.use({ [MODULE_ID]: { noCounter: true } }, {}, {})
+    ? await activity.use({}, {}, {})
     // `consume` left out: dnd5e's default spends the action and resources (6.1 wants an object, not `true`).
     : await activity.use({ subsequentActions: false }, { configure: false }, {});
   if (!results) return null;
@@ -279,6 +297,7 @@ export async function answerReaction(payload) {
   if (!REACTIONS[choice]) return null;
   // Spent while this prompt was open (another prompt for the same creature)?
   if (!REACTIONS[choice].free && !hasReaction(actor)) return null;
+  noteBusy(payload); // casting it (and anything it sets off) can take longer than the asker's usual wait
 
   if (choice === "lucky") {
     const d20 = await useLuckyAgainst(actor);
@@ -297,7 +316,7 @@ export async function answerReaction(payload) {
     return result;
   }
   const aim = attackerToken ? await fromUuid(attackerToken) : null;
-  spending.add(actor.uuid); // while dnd5e's window for it is open
+  spending.add(actor.uuid); // while dnd5e's window for it is open (and a Counterspell against it plays out)
   const used = await useReaction(item, actor, tokenDoc, { aim: choice === "hellish-rebuke" ? aim : null })
     .finally(() => spending.delete(actor.uuid));
   if (!used) return null;
@@ -310,6 +329,10 @@ export async function answerReaction(payload) {
     const roll = await new Roll(`1${bardicDie(actor)}`).evaluate();
     if (game.dice3d) await game.dice3d.showForRoll(roll, game.user, true, null, false);
     result.penalty = roll.total;
+  }
+  if (choice === "silvery-barbs") {
+    result.granted = await grantSilveryAdvantage(actor, tokenDoc).catch(err => { console.error(`[${MODULE_ID}] silvery barbs:`, err); return null; });
+    if (result.granted) result.label = `${result.label}; Advantage to ${result.granted}`;
   }
   if (choice === "absorb-elements") result.types = types.filter(t => ELEMENTS.includes(t));
   if (choice === "superior-hunters-defense" && defenseType) { result.types = [defenseType]; result.resistType = defenseType; }
@@ -329,8 +352,22 @@ export async function answerReaction(payload) {
 
 // ── Asker side ────────────────────────────────────────────────────────────────
 
-// Reaction prompts this client is waiting on, by request id.
+// Reaction prompts this client is waiting on, by request id: the function that settles each; and its timer.
 export const pendingReactions = new Map();
+const reactionTimers = new Map();
+
+/** The asker's side of reactionBusy: the creature has chosen and is working on it — wait longer. */
+export function extendReaction(requestId, ms = BUSY_TIMEOUT) {
+  const finish = pendingReactions.get(requestId);
+  if (!finish) return;
+  clearTimeout(reactionTimers.get(requestId));
+  reactionTimers.set(requestId, setTimeout(() => finish(null), ms));
+}
+
+/** The responder's side: tell the client that asked (when it's another) that an answer is on its way. */
+export function noteBusy(payload) {
+  if (payload?.requestId && payload.from && payload.from !== game.user?.id) socket?.emit("reactionBusy", { to: payload.from, requestId: payload.requestId });
+}
 
 /** Ask whoever answers for this creature; resolves with their answer or null (timeout, nobody). */
 export function askReaction(actor, payload, { timeout: wait = RESPONSE_TIMEOUT } = {}) {
@@ -342,8 +379,14 @@ export function askReaction(actor, payload, { timeout: wait = RESPONSE_TIMEOUT }
   if (!socket) return Promise.resolve(null);
   const requestId = foundry.utils.randomID();
   return new Promise((resolve) => {
-    const timeout = setTimeout(() => { pendingReactions.delete(requestId); resolve(null); }, wait);
-    pendingReactions.set(requestId, (result) => { clearTimeout(timeout); pendingReactions.delete(requestId); resolve(result ?? null); });
+    const finish = (result) => {
+      clearTimeout(reactionTimers.get(requestId));
+      reactionTimers.delete(requestId);
+      pendingReactions.delete(requestId);
+      resolve(result ?? null);
+    };
+    reactionTimers.set(requestId, setTimeout(() => finish(null), wait));
+    pendingReactions.set(requestId, finish);
     const message = { ...payload, requestId, from: game.user.id };
     if (player) socket.emit("offerReaction", { ...message, to: player.id });
     else socket.emit("offerReactionGM", message);
@@ -444,6 +487,26 @@ export async function offerReactions(message, activity) {
   console.log(`[${MODULE_ID}] reactions: ${record.map(r => `${r.by ?? r.name} — ${r.reaction}`).join(", ")}`);
 }
 
+/**
+ * Silvery Barbs' second half, on its caster's client: a creature it can see within 60 ft (itself, if it likes)
+ * has Advantage on its next attack roll, ability check or saving throw within a minute. Resolves with its name.
+ */
+export async function grantSilveryAdvantage(caster, casterDoc) {
+  if (!casterDoc?.parent) return null;
+  const tokens = [...(casterDoc.parent.tokens ?? [])].filter(t => usableBy(t) && (t.id === casterDoc.id
+    || (tokenDistance(casterDoc, t) <= 60 && hasLineOfSight(casterDoc, t))));
+  if (!tokens.length) return null;
+  const picked = await pickCreatures("Silvery Barbs",
+    "Choose a creature (you, if you like) to have Advantage on its next attack roll, ability check or saving throw within 1 minute.",
+    tokens, { max: 1, checked: (t) => t.id === casterDoc.id });
+  const chosen = picked?.[0];
+  if (!chosen?.actor) return null;
+  const effect = masteryEffect(SILVERY, caster, chosen.uuid, { name: "Silvery Barbs: Advantage", img: "icons/svg/daze.svg", magical: true });
+  effect.duration = { value: 1, units: "minutes" };
+  await applyMasteryChange({ kind: SILVERY, token: chosen.uuid, actor: chosen.actor.uuid, effect });
+  return chosen.name;
+}
+
 /** The token that rolled a card: its speaker's, else the actor's first on the scene. */
 function speakerToken(message, actor) {
   const speaker = message?.speaker ?? message?.data?.speaker;
@@ -471,7 +534,7 @@ export async function offerSilveryBarbs(message, roll, actor, rollType) {
     if (answer?.identifier !== "silvery-barbs") continue;
     const before = Number(roll.total ?? 0);
     const again = await LDA.evaluateReroll(roll);
-    return { roll: again && Number(again.total) < before ? again : roll, by: answer.by, before };
+    return { roll: again && Number(again.total) < before ? again : roll, by: answer.by, before, granted: answer.granted ?? null };
   }
   return null;
 }

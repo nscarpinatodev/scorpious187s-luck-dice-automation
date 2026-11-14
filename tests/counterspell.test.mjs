@@ -2,11 +2,14 @@
 import { env } from "./env.mjs";
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { reactionOptions } from "../scripts/native/reactions.mjs";
+import { reactionOptions, grantSilveryAdvantage } from "../scripts/native/reactions.mjs";
+import { attackReasons, consumeRollMarks, silveryMark } from "../scripts/native/advantage.mjs";
+import { onPreRollSave, onPreRollCheck } from "../scripts/native/save-rules.mjs";
+import { MASTERY_FLAG } from "../scripts/native/mastery.mjs";
 import { onD20TestRolled, D20_TESTS } from "../scripts/native/checks.mjs";
 import { counterable, canCastCounterspell, counterspellers, checkCounterspell, installCounterspell } from "../scripts/native/counterspell.mjs";
 
-const { settings, makeToken, prompts, uuids, rollResults } = env;
+const { settings, makeToken, prompts, uuids, rollResults, dialogs } = env;
 const MODULE_ID = "scorpious187s-luck-dice-automation";
 
 canvas.grid = {
@@ -72,6 +75,8 @@ test("Silvery Barbs on a successful save: the roller's enemies within 60 ft are 
     let asked = null;
     prompts.choice = async (title, content, buttons) => { asked = content; return buttons.find(b => b.action === "silvery-barbs") ? "silvery-barbs" : "none"; };
     const roll = { total: 16, d20: 14, options: { target: 15 }, parent: { id: `m${++seq}`, speaker: { token: pip.doc.id }, getFlag: () => null } };
+    const nobody = () => "none";                   // Silvery Barbs' advantage: given to no one here (its own test below)
+    dialogs.push(nobody, nobody);
     rollResults.push(9);
     await onD20TestRolled([roll], { subject: pip.actor }, D20_TESTS["dnd5e.rollSavingThrow"]);
     assert.match(asked, /Pip.*succeeded on a saving throw \(16 vs DC 15\)/);
@@ -137,7 +142,7 @@ test("2014: a spell of its slot's level or lower is countered, its slot still sp
   const verdict = await checkCounterspell(activity, { scaling: 0 });
   assert.match(content, /Mage.*is casting.*fireball.*\(level 3\)/s);
   assert.equal(cs.used.length, 1);
-  assert.deepEqual(cs.used[0][0][MODULE_ID], { noCounter: true });   // Counterspell itself isn't offered up for countering
+  assert.equal(cs.used[0][0][MODULE_ID], undefined);                  // a Counterspell can itself be countered
   assert.equal(verdict.countered, true);
   assert.equal(verdict.rules, "2014");
 
@@ -153,4 +158,91 @@ test("2014: a spell of its slot's level or lower is countered, its slot still sp
   // No one able to: the original consume, untouched.
   const quiet = Object.assign(new Activity(), activity, { getUsageToken: () => creature("Alone", 30, 30, { disposition: 1 }).doc });
   assert.deepEqual(await quiet.consume({}, {}), { spent: true });
+});
+
+// ── Silvery Barbs' advantage ──
+test("Silvery Barbs' second half: its caster picks a creature it can see within 60 ft (itself ticked) for Advantage", async () => {
+  const witch = creature("Witch", 0, 0);
+  const orc = creature("Orc", 2, 0), far = creature("Far", 20, 0);
+  const created = [];
+  orc.actor.createEmbeddedDocuments = async (_t, data) => { created.push(...data); return data; };
+  let offered = null;
+  dialogs.push((ui) => { offered = ui.checkboxes.map(c => [c.value, c.checked]); ui.check(witch.token.id, false); ui.check(orc.token.id); return "ok"; });
+  assert.equal(await grantSilveryAdvantage(witch.actor, witch.doc), "Orc");
+  assert.deepEqual(offered, [[witch.token.id, true], [orc.token.id, false]]);         // not the one 100 ft away
+  assert.equal(created[0].flags[MODULE_ID][MASTERY_FLAG].kind, "silvery-barbs");
+  assert.deepEqual(created[0].duration, { value: 1, units: "minutes" });
+  assert.equal(far.actor.effects.length, 0);
+});
+
+test("the advantage: the creature's next attack, save or check — whichever comes first — and then it's used up", async () => {
+  const mark = { uuid: "E.barbs", disabled: false, isOwner: true, deleted: 0, async delete() { this.deleted++; },
+    getFlag: (m, k) => m === MODULE_ID && k === MASTERY_FLAG ? { kind: "silvery-barbs" } : undefined };
+  uuids.set("E.barbs", mark);
+  const pip = creature("Pip", 0, 0, { disposition: 1 });
+  pip.actor.effects = [mark];
+  pip.actor.system.abilities = { dex: { mod: 2 } };
+  assert.equal(silveryMark(pip.actor), mark);
+
+  // An attack (the attack rules on).
+  settings.attackAdvantage = true;
+  const orc = creature("Orc", 1, 0);
+  canvas.tokens.setTargets([orc.token.id]);
+  const reasons = attackReasons({ type: "attack", actor: pip.actor, item: { type: "weapon", system: { range: {}, properties: new Set(), type: {} } },
+    attack: { type: { value: "melee", classification: "weapon" } }, getUsageToken: () => pip.doc });
+  assert.ok(reasons.advantage.includes("Silvery Barbs"));
+  assert.ok(reasons.consume.includes("E.barbs"));
+
+  // A save, with Saving Throw Rules off: only Silvery Barbs is read.
+  settings.saveRules = false;
+  const message = { data: { flags: {} } };
+  const config = { subject: pip.actor, ability: "dex", rolls: [{ options: {} }] };
+  onPreRollSave(config, { options: {} }, message);
+  assert.equal(config.advantage, true);
+  assert.deepEqual(message.data.flags[MODULE_ID].saveReasons.advantage, ["Silvery Barbs"]);
+
+  // A check (not initiative).
+  const checkMsg = { data: { flags: {} } };
+  const check = { subject: pip.actor, rolls: [{ options: {} }] };
+  onPreRollCheck(check, null, checkMsg);
+  assert.equal(check.advantage, true);
+  const init = { subject: pip.actor, hookNames: ["initiativeDialog", "abilityCheck"], rolls: [{ options: {} }] };
+  onPreRollCheck(init, null, { data: { flags: {} } });
+  assert.equal(init.advantage, undefined);
+
+  // Rolled: used up (once, however many hooks fire).
+  const rolled = { getFlag: (m, k) => m === MODULE_ID && k === "saveReasons" ? checkMsg.data.flags[MODULE_ID].saveReasons : undefined };
+  await Promise.all([consumeRollMarks(rolled), consumeRollMarks(rolled)]);
+  assert.equal(mark.deleted, 1);
+});
+
+test("a Counterspell can be countered, but nobody already countering is asked again: the chain ends", async () => {
+  // Activities whose use goes through consume, as dnd5e's do (wrapped by installCounterspell).
+  class Act {
+    constructor(item, props = {}) { Object.assign(this, { item, activation: { type: "reaction" }, effects: [], ...props }); }
+    async consume() { return {}; }
+    async use(usage = {}) { this.item.used.push([usage]); return (await this.consume(usage, {})) === false ? null : { message: { id: `use${++seq}`, system: {} } }; }
+  }
+  installCounterspell({ chainTest: { documentClass: Act } });
+  const csItem = () => {
+    const item = { id: `cs${++seq}`, name: "counterspell", type: "spell", used: [], system: { identifier: "counterspell", level: 3, source: { rules: "2014" },
+      properties: new Set(["somatic"]), activities: null } };
+    item.system.activities = new Map([["a", new Act(item, { type: "check" })]]);
+    return item;
+  };
+  const caster = creature("Mage", 0, 0, { disposition: 1, items: [] });
+  const foeCS = csItem(), allyCS = csItem();
+  const foe = creature("Foe", 4, 0, { items: [foeCS], spells: { spell3: { value: 1 } } });
+  const ally = creature("Ally", 1, 0, { disposition: 1, items: [allyCS], spells: { spell3: { value: 1 } } });
+  for (const [it, who] of [[foeCS, foe], [allyCS, ally]]) for (const a of it.system.activities.values()) { a.actor = who.actor; a.getUsageToken = () => who.doc; }
+  const asked = [];
+  prompts.choice = async (_t, content) => { asked.push(/Use (\w+)'s reaction/.exec(content)?.[1]); return "counter"; };
+  const fireBolt = spell("fire-bolt", { level: 0 });
+  const bolt = Object.assign(new Act(fireBolt), { actor: caster.actor, getUsageToken: () => caster.doc });
+
+  const result = await bolt.consume({}, {});
+  assert.deepEqual(asked, ["Foe", "Ally"]);            // the foe counters; the ally counters the foe's Counterspell; then it's over
+  assert.notEqual(result, false);                        // the foe's Counterspell was countered: Fire Bolt goes ahead
+  assert.equal(foeCS.used.length, 1);
+  assert.equal(allyCS.used.length, 1);
 });

@@ -937,7 +937,8 @@ Hooks.once("init", () => {
           "Words and Silvery Barbs; before damage: Absorb Elements, Parry, Deflect Attacks (redirecting the attack with a " +
           "Focus Point when it takes all the damage), 2024 Superior Hunter's Defense (resistance to the damage's main type until " +
           "the end of the turn); after damage: Hellish Rebuke; on a successful save or ability check: enemies' Silvery Barbs " +
-          "(a reroll keeping the lower); when a spell is cast: enemies' Counterspell (2024: the caster's Constitution save, " +
+          "(a reroll keeping the lower; on an attack hit too; its caster then gives a creature Advantage on its next attack, " +
+          "check or save within a minute); when a spell is cast: enemies' Counterspell (2024: the caster's Constitution save, " +
           "no slot spent if it fails; 2014: automatic up to its slot level, else an ability check). Asked of the " +
           "creature's player (or the GM); each is used through dnd5e. One reaction per creature until its next turn " +
           "(shared with opportunity attacks), shown in combat by a Reaction Used status you can toggle on the token HUD.",
