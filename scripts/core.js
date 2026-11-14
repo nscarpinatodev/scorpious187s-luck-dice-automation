@@ -519,9 +519,13 @@ function stepIcon(label = "") {
  * Laid out with inline flex so it also renders inside Midi's card, which
  * doesn't carry dnd5e's icon-row styles. Returns a detached element.
  */
+/** Whether a history step spent Luck Dice or Inspiration (not Bardic Inspiration, Silvery Barbs and the like). */
+const isLuckStep = (entry) => /Luck Dice|(^|with )Inspiration/i.test(entry?.label ?? "");
+
 function renderLuckSection(history, {
   className = "lda-luck-history",
-  title = history.entries?.length ? "Luck Dice" : "Result"
+  // "Luck Dice" only when some were spent; other changes (Silvery Barbs, Bardic Inspiration, Lucky…) are "Roll Changes".
+  title = history.entries?.some(isLuckStep) ? "Luck Dice" : history.entries?.length ? "Roll Changes" : "Result"
 } = {}) {
   const escape   = foundry.utils.escapeHTML ?? ((s) => String(s));
   const hasTotal = (e) => e.total !== undefined && e.total !== null;
@@ -538,7 +542,7 @@ function renderLuckSection(history, {
   const wrapper = document.createElement("div");
   wrapper.innerHTML = `
     <section class="icon-row ${className}" style="display:flex;align-items:flex-start;gap:6px;margin:2px 0">
-      <i class="fa-fw fa-solid ${history.entries?.length ? "fa-clover" : "fa-dice-d20"}" aria-label="${escape(title)}" style="margin-top:2px;opacity:0.8"></i>
+      <i class="fa-fw fa-solid ${history.entries?.some(isLuckStep) ? "fa-clover" : history.entries?.length ? "fa-rotate" : "fa-dice-d20"}" aria-label="${escape(title)}" style="margin-top:2px;opacity:0.8"></i>
       <div style="flex:1;min-width:0">
         <div style="display:flex;justify-content:space-between;align-items:baseline;gap:6px">
           <strong>${escape(title)}</strong>
@@ -932,7 +936,9 @@ Hooks.once("init", () => {
     hint: "Offer reactions when they'd matter — on a hit: Shield, Defensive Duelist, Uncanny Dodge, and allies' Cutting " +
           "Words and Silvery Barbs; before damage: Absorb Elements, Parry, Deflect Attacks (redirecting the attack with a " +
           "Focus Point when it takes all the damage), 2024 Superior Hunter's Defense (resistance to the damage's main type until " +
-          "the end of the turn); after damage: Hellish Rebuke. Asked of the " +
+          "the end of the turn); after damage: Hellish Rebuke; on a successful save or ability check: enemies' Silvery Barbs " +
+          "(a reroll keeping the lower); when a spell is cast: enemies' Counterspell (2024: the caster's Constitution save, " +
+          "no slot spent if it fails; 2014: automatic up to its slot level, else an ability check). Asked of the " +
           "creature's player (or the GM); each is used through dnd5e. One reaction per creature until its next turn " +
           "(shared with opportunity attacks), shown in combat by a Reaction Used status you can toggle on the token HUD.",
     scope: "world",

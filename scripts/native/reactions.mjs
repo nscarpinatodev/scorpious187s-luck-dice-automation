@@ -12,7 +12,14 @@
 //     Cutting Words     — an ally of the target within 60 ft of the attacker, who
 //                         can see it: subtract a Bardic Inspiration die when that
 //                         could turn the hit into a miss;
-//     Silvery Barbs     — the same allies: the attacker rerolls, keeping the lower;
+//     Silvery Barbs     — the same allies: the attacker rerolls, keeping the lower
+//                         (a critical hit too: the new d20 decides);
+//   on a success (the roller's client, checks.mjs): a save, ability check, skill or
+//   tool check that beats its DC —
+//     Silvery Barbs     — the roller's enemies within 60 ft who can see it: it
+//                         rerolls, keeping the lower (then its Luck Dice on a failure);
+//   when a spell is cast (the caster's client, counterspell.mjs):
+//     Counterspell      — its enemies within 60 ft who can see it;
 //   before damage is applied (the GM's client, as it applies the damage):
 //     Absorb Elements   — acid, cold, fire, lightning or thunder: resistance to it;
 //     Parry             — a melee attack: reduce the damage by the Parry roll;
@@ -49,6 +56,7 @@ import { isTriggerClient } from "./lingering.mjs";
 import { answerOpportunity } from "./opportunity.mjs";
 import { answerWallSide } from "./walls.mjs";
 import { deflectsTypes, offerRedirect } from "./monk.mjs";
+import { answerCounterspell } from "./counterspell.mjs";
 import {
   LDA, MODULE_ID, escapeHTML, promptChoice, getReactionPrompts, socket, getPrimaryGM, activePlayerOwner,
   resolveTarget, combineRolls, isRollBoostsEnabled, getKeptD20Result, isInvocationsEnabled, antimagicStops, hasStockEffect, isLike
@@ -90,8 +98,9 @@ export const REACTIONS = {
     useful: ({ total, ac, critical, actor }) => !critical && finite(ac) && total - dieMax(bardicDie(actor)) < ac
   },
   "silvery-barbs": {
-    when: "hit", ally: true, label: () => "Silvery Barbs (reroll the attack, keep the lower)",
-    useful: ({ critical }) => !critical
+    // A critical hit too: the reroll replaces the d20, so a natural 20 can become a miss (unlike Cutting Words).
+    when: "hit", ally: true, label: (_actor, { when }) => when === "success" ? "Silvery Barbs (reroll it, keep the lower)" : "Silvery Barbs (reroll the attack, keep the lower)",
+    useful: () => true
   },
   "absorb-elements": {
     when: "damage", label: (_actor, { types }) => `Absorb Elements (resist ${types.filter(t => ELEMENTS.includes(t)).join(", ")})`,
@@ -222,8 +231,10 @@ async function useReaction(item, actor, tokenDoc, { aim } = {}) {
   if (!activity?.use) return null;
   if (aim && canvas?.scene === aim.parent) canvas.tokens?.setTargets([aim.id], { mode: "replace" });
   const spell = item.type === "spell";
+  // A reaction spell cast from these prompts isn't offered to Counterspell (counterspell.mjs): the prompt that
+  // asked for it is still waiting on its answer.
   const results = spell
-    ? await activity.use({}, {}, {})
+    ? await activity.use({ [MODULE_ID]: { noCounter: true } }, {}, {})
     // `consume` left out: dnd5e's default spends the action and resources (6.1 wants an object, not `true`).
     : await activity.use({ subsequentActions: false }, { configure: false }, {});
   if (!results) return null;
@@ -243,7 +254,8 @@ export async function answerReaction(payload) {
   if (payload?.kind === "opportunity") return answerOpportunity(payload);
   if (payload?.kind === "wallSide") return answerWallSide(payload);
   if (payload?.kind === "gift") return answerGift(payload);
-  const { token, actor: actorUuid, options, attackerName, itemName, total, ac, when = "hit", targetName, types = [], attackerToken, damage, mainType, melee, defenseType } = payload;
+  if (payload?.kind === "counterspell") return answerCounterspell(payload);
+  const { token, actor: actorUuid, options, attackerName, itemName, total, ac, when = "hit", targetName, types = [], attackerToken, damage, mainType, melee, defenseType, rollType } = payload;
   const { tokenDoc, actor } = await resolveTarget({ token, actor: actorUuid });
   if (!actor?.isOwner) return null;
   // Free ones (Lucky) don't need the reaction.
@@ -251,10 +263,12 @@ export async function answerReaction(payload) {
   if (!available.length) return null;
 
   const name = tokenDoc?.name ?? actor.name;
-  const context = { attackerName: attackerName ?? "the attacker", types, defenseType };
+  const context = { attackerName: attackerName ?? "the attacker", types, defenseType, when };
   const what = when === "hit"
     ? `<strong>${escapeHTML(attackerName ?? "An attacker")}</strong> hit <strong>${escapeHTML(targetName ?? name)}</strong>
        ${itemName ? `with ${escapeHTML(itemName)} ` : ""}(${total}${finite(ac) ? ` vs AC ${ac}` : ""})`
+    : when === "success"
+      ? `<strong>${escapeHTML(targetName ?? "A creature")}</strong> succeeded on a ${escapeHTML(rollType ?? "roll")} (${total}${finite(ac) ? ` vs DC ${ac}` : ""})`
     : when === "damage"
       ? `<strong>${escapeHTML(name)}</strong> is about to take ${escapeHTML(types.join(", ") || "")} damage from ${escapeHTML(attackerName ?? "an attack")}`
       : `<strong>${escapeHTML(attackerName ?? "A creature")}</strong> damaged <strong>${escapeHTML(name)}</strong>`;
@@ -337,7 +351,7 @@ export function askReaction(actor, payload, { timeout: wait = RESPONSE_TIMEOUT }
 }
 
 /** Whether this creature is asked under the setting (player characters only, or everyone). */
-function asksFor(actor, mode) {
+export function asksFor(actor, mode) {
   return !!actor && mode !== "off" && (mode === "all" || actor.type === "character");
 }
 
@@ -428,6 +442,38 @@ export async function offerReactions(message, activity) {
   if (roll !== message.rolls?.[0]) update.rolls = [roll, ...message.rolls.slice(1)];
   await message.update(update);
   console.log(`[${MODULE_ID}] reactions: ${record.map(r => `${r.by ?? r.name} — ${r.reaction}`).join(", ")}`);
+}
+
+/** The token that rolled a card: its speaker's, else the actor's first on the scene. */
+function speakerToken(message, actor) {
+  const speaker = message?.speaker ?? message?.data?.speaker;
+  const scene = speaker?.scene ? game.scenes?.get?.(speaker.scene) : canvas?.scene;
+  return (speaker?.token ? scene?.tokens?.get?.(speaker.token) : null) ?? tokenOf(actor?.getActiveTokens?.()?.[0]);
+}
+
+/**
+ * A save or check that succeeded (checks.mjs, on the roller's client): Silvery Barbs from its enemies within
+ * 60 ft who can see it, asked in turn until one uses it. Resolves with { roll (the lower), by, before } or null.
+ */
+export async function offerSilveryBarbs(message, roll, actor, rollType) {
+  const mode = getReactionPrompts();
+  if (mode === "off" || !roll || !actor) return null;
+  const rollerDoc = speakerToken(message, actor);
+  if (!rollerDoc?.parent || !rollerDoc.disposition) return null;
+  const dc = Number(roll.options?.target);
+  for (const t of rollerDoc.parent.tokens ?? []) {
+    if (!usableBy(t) || t.id === rollerDoc.id || t.disposition !== -rollerDoc.disposition) continue;
+    if (!asksFor(t.actor, mode) || !hasReaction(t.actor)) continue;
+    if (!reactionOptions(t.actor, {}, "hit", { ally: true }).includes("silvery-barbs")) continue; // the spell, a slot, no antimagic
+    if (tokenDistance(t, rollerDoc) > 60 || !hasLineOfSight(t, rollerDoc)) continue;
+    const answer = await askReaction(t.actor, { token: t.uuid, actor: t.actor.uuid, options: ["silvery-barbs"], when: "success",
+      targetName: rollerDoc.name, total: Number(roll.total ?? 0), ac: dc, rollType });
+    if (answer?.identifier !== "silvery-barbs") continue;
+    const before = Number(roll.total ?? 0);
+    const again = await LDA.evaluateReroll(roll);
+    return { roll: again && Number(again.total) < before ? again : roll, by: answer.by, before };
+  }
+  return null;
 }
 
 /** Rebuke of the Talisman: psychic damage to the attacker, and a push of up to 10 ft away from the wearer. */

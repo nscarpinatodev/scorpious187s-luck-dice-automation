@@ -1,10 +1,12 @@
 // ── Scorpious187's Luck Dice Automation — Native dnd5e 6 ──────────────────────
-// Saves, ability checks, skills, tools and concentration: Luck Dice on a failure; breaking concentration.
+// Saves, ability checks, skills, tools and concentration: Silvery Barbs on a success; Luck Dice on a failure;
+// breaking concentration.
 
 import { correctDeathSave } from "./deathsaves.mjs";
 import { rollExtras } from "./boosts.mjs";
 import { autoFailOf } from "./save-rules.mjs";
-import { LDA, MODULE_ID, debug, getKeptD20Result, HISTORY_FLAG, requestRollActors, isConcentrationBreakEnabled, finishCardHistory, cardReporter, canUseLuck, promptChoice, escapeHTML, getLegendaryResistance } from "./shared.mjs";
+import { offerSilveryBarbs } from "./reactions.mjs";
+import { LDA, MODULE_ID, debug, getKeptD20Result, HISTORY_FLAG, requestRollActors, isConcentrationBreakEnabled, finishCardHistory, cardReporter, recordCardStep, canUseLuck, promptChoice, escapeHTML, getLegendaryResistance } from "./shared.mjs";
 
 // ── Saves, checks and concentration ──────────────────────────────────────────
 
@@ -25,10 +27,12 @@ export const D20_TESTS = {
  * each step and rewrites the card's roll, so dnd5e redraws success / failure.
  * Rolls without a DC are skipped — nothing says they failed — and so are
  * automatic failures (save-rules.mjs), which no bonus can turn around.
+ * A success is first offered to the roller's enemies' Silvery Barbs (reactions.mjs):
+ * a reroll keeping the lower, which can make it a failure.
  */
 export async function onD20TestRolled(rolls, data, test) {
   try {
-    const roll    = rolls?.[0];
+    let roll      = rolls?.[0];
     const message = roll?.parent;
     const actor   = data?.subject;
     if (!message || !actor) return;
@@ -39,12 +43,26 @@ export async function onD20TestRolled(rolls, data, test) {
     if (!Number.isFinite(dc) || dc <= 0) return;
     // Automated Conditions 5e's forced failure (its DC of 999): nothing could reach it.
     if (dc === 999 && game.modules.get("automated-conditions-5e")?.active) return;
-    const total = Number(roll.total ?? 0);
-    if (total >= dc) return;
+    let total = Number(roll.total ?? 0);
+    let barbed = false;
+    if (total >= dc) {
+      const barbs = await offerSilveryBarbs(message, roll, actor, test.rollType)
+        .catch(err => { console.error(`[${MODULE_ID}] silvery barbs:`, err); return null; });
+      if (!barbs) return;
+      await recordCardStep(message, barbs.roll, barbs.before, {
+        kind: "check", label: `Silvery Barbs (${barbs.by}): rerolled, kept the lower`, total: Number(barbs.roll.total ?? 0),
+        detail: `d20: ${getKeptD20Result(barbs.roll) ?? "?"}`
+      });
+      roll = barbs.roll; total = Number(roll.total ?? 0); barbed = true;
+      if (total >= dc) { await finishCardHistory(message, "passed"); return; }
+    }
 
     // Bardic Inspiration, Lucky… — offered with the Luck Dice, and to creatures without them.
     const extras = rollExtras(actor, test.kind ?? "check");
-    if (!canUseLuck(actor) && !extras) return;
+    if (!canUseLuck(actor) && !extras) {
+      if (barbed) { await finishCardHistory(message, "failed"); await refreshOriginSummary(message); }
+      return;
+    }
 
     debug(`native ${test.rollType}: ${actor.name} rolled ${total} vs DC ${dc}`);
 

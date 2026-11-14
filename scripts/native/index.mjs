@@ -38,6 +38,7 @@ import { onEffectCreated, onTurnEndRepeatSaves } from "./repeat-saves.mjs";
 import { answerReaction, pendingReactions, onTurnStartReaction, onCombatEndedReactions } from "./reactions.mjs";
 import { onPreRollAttack, onPreRollDamage, onPreRollDamageFeats, onRenderAttackDialog, consumeAttackMarks, consumeAttackMarkGM } from "./advantage.mjs";
 import { onPreRollSave, onRenderSaveDialog, installAutoFail } from "./save-rules.mjs";
+import { installCounterspell } from "./counterspell.mjs";
 import { rollExtras, markBoostTargets, markBardicGM, consumeBoostGM, endBoostSpellGM } from "./boosts.mjs";
 import { onPreRollAttackInvocations, onPreRollDamageInvocations, onDamageAppliedGift, onTurnStartCloak, onMaddeningHexUsed } from "./invocations.mjs";
 import { onPreUseMetamagic, onRenderUsageDialog, onMetamagicUsed, onPreRollDamageMetamagic, onPreRollConcentrationMetamagic } from "./metamagic.mjs";
@@ -62,6 +63,8 @@ Hooks.once("ready", () => {
 
   // Automatic save failures travel with the roll; every client judges them the same way.
   installAutoFail();
+  // Counterspell: a spell's use waits for it (each activity type's consume, wrapped).
+  installCounterspell();
   // Bardic Inspiration, Lucky… in the shared prompts — also the roll-request window's (skill-check.js).
   LDA.rollExtras = rollExtras;
 
