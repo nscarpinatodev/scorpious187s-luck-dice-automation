@@ -37,7 +37,8 @@ Your GM chooses which of these are on. The setting each one belongs to is in bra
 | **Your conditions** | Prone, Restrained or Blinded give disadvantage. Frightened gives disadvantage while you can see what frightened you. Invisible gives advantage. |
 | **Your target's conditions** | Advantage against a target that's Restrained, Blinded, Paralyzed, Stunned, Unconscious or Petrified. Against a Prone target: advantage within 5 ft, disadvantage farther away. Disadvantage against a target that's Invisible or Dodging. |
 | **Features and spells** | Reckless Attack (yours, or the target's), Faerie Fire, Guiding Bolt, and disadvantage with a Heavy weapon you're too small or too weak to wield well. |
-| **One-time marks** | Vex, Sap and Stunning Strike's advantage. These apply to the next attack only and are used up by it. |
+| **One-time marks** | Vex, Sap, Studied Attacks (after a Fighter misses a creature) and Stunning Strike's advantage. These apply to the next attack only and are used up by it. |
+| **Elusive** | A Rogue with Elusive can't be attacked with advantage from any source, unless they're Incapacitated. The card lists the advantage that was ignored. |
 | **Cover** | Spell Sniper and Sharpshooter ignore half and three-quarters cover. The card shows the target's AC without the cover bonus. |
 
 Advantage and disadvantage from any sources cancel out, as the rules say. Checks about your target only work with exactly one target selected.

@@ -14,7 +14,10 @@
 //                Unconscious, Petrified, Invisible, or Dodging;
 //   features   — Reckless Attack (the attacker's Strength attacks; attacks against
 //                a reckless creature), Faerie Fire, Guiding Bolt (its mark is used
-//                up by the attack), a Heavy weapon in small or weak hands;
+//                up by the attack), a Heavy weapon in small or weak hands, Studied
+//                Attacks (fighter.mjs: after a miss, the next attack at that creature);
+//                a target with Elusive (Rogue 18) that isn't Incapacitated: no
+//                Advantage from any source;
 //   feats      — Spell Sniper (range; 2024: enemies within 5 ft), Crossbow Expert and
 //                Gunner (enemies within 5 ft), Sharpshooter (long range; 2024: enemies
 //                within 5 ft); Spell Sniper and Sharpshooter ignore half and
@@ -390,12 +393,21 @@ export function attackReasons(activity, config = {}) {
     if (reason) disadvantage.push(reason);
   }
 
-  return { advantage, disadvantage, cancel, consume, ignored, dropAc5e, coverIgnored };
+  // Elusive (Rogue 18): no attack roll has Advantage against it unless it's Incapacitated. The reasons
+  // found are set aside (marks are still used up: this was the next attack); mergeRollMode drops the
+  // Advantage from other sources too.
+  let elusive = null;
+  if (targetActor && hasFeat(targetActor, "elusive") && !INCAPACITATING.some(s => has(targetActor, s))) {
+    elusive = { name: target.name, blocked: advantage.splice(0) };
+  }
+
+  return { advantage, disadvantage, cancel, consume, ignored, dropAc5e, coverIgnored, elusive };
 }
 
 /**
- * Weapon Mastery marks (mastery.mjs): Sap on the attacker, Vex against this target; and Stunning Strike's
- * (monk.mjs) on the target — the next attack against it, by anyone, has Advantage. Used up by the attack.
+ * Weapon Mastery marks (mastery.mjs): Sap on the attacker, Vex against this target; Studied Attacks'
+ * (fighter.mjs) against this target; and Stunning Strike's (monk.mjs) on the target — the next attack
+ * against it, by anyone, has Advantage. Used up by the attack.
  */
 function addMasteryReasons(fx, { advantage, disadvantage, consume }) {
   const masteryOf = (effect) => effect.disabled ? null : effect.getFlag?.(MODULE_ID, MASTERY_FLAG);
@@ -404,6 +416,8 @@ function addMasteryReasons(fx, { advantage, disadvantage, consume }) {
   if (sapped) { disadvantage.push("Sapped"); consume.push(sapped.uuid); }
   const vexing = fx.target ? effects.find(e => masteryOf(e)?.kind === "vex" && masteryOf(e).target === fx.target.uuid) : null;
   if (vexing) { advantage.push("Vex"); consume.push(vexing.uuid); }
+  const studied = fx.target ? effects.find(e => masteryOf(e)?.kind === "studied-attacks" && masteryOf(e).target === fx.target.uuid) : null;
+  if (studied) { advantage.push("Studied Attacks"); consume.push(studied.uuid); }
   const exposed = fx.target ? [...(fx.target.actor?.effects ?? [])].find(e => masteryOf(e)?.kind === "stunning-strike") : null;
   if (exposed) { advantage.push("Stunning Strike"); consume.push(exposed.uuid); }
 }
@@ -447,7 +461,7 @@ export function onPreRollAttack(config, dialog, message) {
     ui.notifications?.warn(`Luck Dice Automation: ${reasons.cancel}`);
     return false;
   }
-  if (!reasons.advantage.length && !reasons.disadvantage.length && !reasons.ignored?.length) return;
+  if (!reasons.advantage.length && !reasons.disadvantage.length && !reasons.ignored?.length && !reasons.elusive) return;
 
   if (reasons.coverIgnored?.length) bypassCover(config, message, reasons.coverIgnored);
   if (reasons.dropAc5e?.includes("nearbyFoe")) dropAc5eNearbyFoe(config);
@@ -548,7 +562,13 @@ export function mergeRollMode(config, dialog, reasons) {
   const ac5e = game.modules.get(AC5E_ID)?.active ? roll0[AC5E_ID] : null;
   const priorAdvantage = ac5e ? !!ac5e.hasTransitAdvantage : !!(roll0.advantage || config.advantage);
   const priorDisadvantage = ac5e ? !!ac5e.hasTransitDisadvantage : !!(roll0.disadvantage || config.disadvantage);
-  const hasAdvantage = priorAdvantage || reasons.advantage.length > 0;
+  // Elusive: no Advantage from any source; what it cancelled is noted as ignored.
+  const elusive = reasons.elusive;
+  if (elusive) {
+    const blocked = [...(elusive.blocked ?? []), ...(priorAdvantage ? ["advantage from other sources"] : [])];
+    if (blocked.length) (reasons.ignored ??= []).push(`${blocked.join(", ")} (${elusive.name} is Elusive)`);
+  }
+  const hasAdvantage = !elusive && (priorAdvantage || reasons.advantage.length > 0);
   const hasDisadvantage = priorDisadvantage || reasons.disadvantage.length > 0;
   const modes = CONFIG.Dice.D20Roll?.ADV_MODE ?? { NORMAL: 0, ADVANTAGE: 1, DISADVANTAGE: -1 };
   const finalMode = hasAdvantage && !hasDisadvantage ? modes.ADVANTAGE : hasDisadvantage && !hasAdvantage ? modes.DISADVANTAGE : modes.NORMAL;
@@ -627,12 +647,12 @@ export async function consumeAttackMarks(message) {
   }
 }
 
-/** GM side: remove a mark an attack used up — only marks this module consumes (Guiding Bolt, Sap, Vex, Stunning Strike). */
+/** GM side: remove a mark an attack used up — only marks this module consumes (Guiding Bolt, Sap, Vex, Studied Attacks, Stunning Strike). */
 export async function consumeAttackMarkGM({ uuid }) {
   const effect = await fromUuid(uuid);
   if (!effect) return;
   const mastery = effect.getFlag?.(MODULE_ID, MASTERY_FLAG)?.kind;
-  if (sourceItem(effect)?.system?.identifier === "guiding-bolt" || ["sap", "vex", "stunning-strike"].includes(mastery)) await effect.delete();
+  if (sourceItem(effect)?.system?.identifier === "guiding-bolt" || ["sap", "vex", "studied-attacks", "stunning-strike"].includes(mastery)) await effect.delete();
 }
 
 /**

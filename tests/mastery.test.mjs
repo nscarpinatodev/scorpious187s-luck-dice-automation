@@ -4,7 +4,8 @@ import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { applyWeaponMastery, pushDestination, cleaveCandidates, onPreRollDamageCleave, MASTERY_FLAG, MASTERY_RESULT_FLAG, CLEAVE_FLAG } from "../scripts/native/mastery.mjs";
 import { offerLegendaryResistance, breakConcentrationIfFailed } from "../scripts/native/checks.mjs";
-import { onPreRollDamage, attackReasons } from "../scripts/native/advantage.mjs";
+import { onPreRollDamage, attackReasons, mergeRollMode } from "../scripts/native/advantage.mjs";
+import { applyStudiedAttacks, STUDIED_FLAG } from "../scripts/native/fighter.mjs";
 
 const { settings, makeToken, prompts, uuids } = env;
 const MODULE_ID = "scorpious187s-luck-dice-automation";
@@ -225,6 +226,90 @@ test("Stunning Strike's mark: the next attack against that creature, by anyone, 
     attack: { type: { value: "melee", classification: "weapon" } }, getUsageToken: () => rogue.doc });
   assert.ok(reasons.advantage.includes("Stunning Strike"));
   assert.deepEqual(reasons.consume, ["E.exposed"]);
+});
+
+// ── Studied Attacks (Fighter 13) and Elusive (Rogue 18), under Attack Rules ──
+const swing = (attacker) => ({ type: "attack", actor: attacker.actor, item: { type: "weapon", system: { range: {}, properties: new Set(), type: {} } },
+  attack: { type: { value: "melee", classification: "weapon" } }, getUsageToken: () => attacker.doc });
+const markOf = (kind, target, uuid = `E.${kind}`) => ({ uuid, disabled: false, isOwner: true, deleted: false, async delete() { this.deleted = true; },
+  getFlag: (m, k) => m === MODULE_ID && k === MASTERY_FLAG ? { kind, target } : undefined });
+
+test("Studied Attacks: a miss marks that creature for the fighter's next attack, until the end of its next turn", async () => {
+  settings.attackAdvantage = true;
+  const fighter = creature("Fighter", 0, 0, { disposition: 1 });
+  fighter.actor.items.push({ system: { identifier: "studied-attacks" } });
+  const orc = creature("Orc", 1, 0), elf = creature("Elf", 1, 1);
+  const message = card(undefined, { hits: [elf], misses: [orc] });
+  await applyStudiedAttacks(message, weaponAttack(fighter));
+  assert.equal(fighter.actor.created.length, 1);
+  const [mark] = fighter.actor.created;
+  assert.deepEqual(mark.flags[MODULE_ID][MASTERY_FLAG], { kind: "studied-attacks", attacker: fighter.actor.uuid, target: orc.doc.uuid });
+  assert.equal(mark.duration.expiry, "sourceEnd");
+  assert.match(message.flags[STUDIED_FLAG].text, /next attack against Orc\d*/);
+  await applyStudiedAttacks(message, weaponAttack(fighter));             // once per card
+  assert.equal(fighter.actor.created.length, 1);
+
+  // A newer miss against the same creature replaces its mark; one against another creature doesn't.
+  const old = markOf("studied-attacks", orc.doc.uuid), other = markOf("studied-attacks", elf.doc.uuid, "E.other");
+  fighter.actor.effects.push(old, other);
+  await applyStudiedAttacks(card(undefined, { misses: [orc] }), weaponAttack(fighter));
+  assert.equal(old.deleted, true);
+  assert.equal(other.deleted, false);
+});
+
+test("Studied Attacks: nothing on a hit, without the feature, or with Attack Rules off", async () => {
+  settings.attackAdvantage = true;
+  const fighter = creature("Fighter", 0, 0, { disposition: 1 });
+  const orc = creature("Orc", 1, 0);
+  await applyStudiedAttacks(card(undefined, { misses: [orc] }), weaponAttack(fighter));     // no feature
+  fighter.actor.items.push({ system: { identifier: "studied-attacks" } });
+  await applyStudiedAttacks(card(undefined, { hits: [orc] }), weaponAttack(fighter));       // a hit
+  settings.attackAdvantage = false;
+  await applyStudiedAttacks(card(undefined, { misses: [orc] }), weaponAttack(fighter));     // setting off
+  assert.equal(fighter.actor.created.length, 0);
+});
+
+test("Studied Attacks' mark: Advantage on the next attack against that creature only, used up by it", () => {
+  settings.attackAdvantage = true;
+  const fighter = creature("Fighter", 0, 0, { disposition: 1 });
+  const orc = creature("Orc", 1, 0), elf = creature("Elf", 1, 1);
+  fighter.actor.effects.push(markOf("studied-attacks", orc.doc.uuid));
+  canvas.tokens.setTargets([orc.token.id]);
+  const atOrc = attackReasons(swing(fighter));
+  assert.ok(atOrc.advantage.includes("Studied Attacks"));
+  assert.deepEqual(atOrc.consume, ["E.studied-attacks"]);
+  canvas.tokens.setTargets([elf.token.id]);
+  assert.equal(attackReasons(swing(fighter)).advantage.includes("Studied Attacks"), false);
+});
+
+test("Elusive: no Advantage against it from any source, unless it's Incapacitated; marks are still used up", () => {
+  settings.attackAdvantage = true;
+  const fighter = creature("Fighter", 0, 0, { disposition: 1 });
+  const rogue = creature("Rogue", 1, 0, { statuses: ["prone"] });
+  rogue.actor.items.push({ system: { identifier: "elusive" } });
+  fighter.actor.effects.push(markOf("vex", rogue.doc.uuid));
+  canvas.tokens.setTargets([rogue.token.id]);
+  const reasons = attackReasons(swing(fighter));
+  assert.deepEqual(reasons.advantage, []);
+  assert.deepEqual(reasons.elusive, { name: rogue.doc.name, blocked: ["Target prone", "Vex"] });
+  assert.deepEqual(reasons.consume, ["E.vex"]);
+
+  // Advantage from elsewhere (dnd5e, another module) is dropped too, and noted.
+  const config = { advantage: true, rolls: [{ options: { advantage: true } }] }, dialog = { options: {} };
+  assert.equal(mergeRollMode(config, dialog, reasons), 0);
+  assert.equal(config.advantage, false);
+  assert.equal(dialog.options.defaultButton, "normal");
+  assert.match(reasons.ignored.at(-1), /^Target prone, Vex, advantage from other sources \(Rogue\d* is Elusive\)$/);
+
+  // Disadvantage still counts.
+  fighter.actor.statuses.add("blinded");
+  const blind = attackReasons(swing(fighter));
+  assert.equal(mergeRollMode({ rolls: [{ options: {} }] }, null, blind), -1);
+  fighter.actor.statuses.delete("blinded");
+
+  rogue.actor.statuses.add("incapacitated");
+  assert.ok(attackReasons(swing(fighter)).advantage.includes("Vex"));
+  assert.equal(attackReasons(swing(fighter)).elusive, null);
 });
 
 // ── Automatic critical hits ──

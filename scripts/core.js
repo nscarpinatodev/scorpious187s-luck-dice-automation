@@ -672,6 +672,8 @@ Hooks.once("init", () => {
           "ignore half and three-quarters cover (taken off the target's AC); 2024 Crossbow Expert's off-hand crossbow damage. " +
           "And the fighting styles: Two-Weapon Fighting (the ability modifier on off-hand damage) and Great Weapon Fighting " +
           "(two-handed melee damage dice: 1s and 2s count as 3s; 2014: rerolled once). " +
+          "And Studied Attacks (Fighter 13: after a miss, advantage on the next attack against that creature) and Elusive " +
+          "(Rogue 18: no attack against it has advantage, from any source, unless it's Incapacitated). " +
           "Shown in the roll window and on the card. With Automated Conditions 5e active, the checks it performs are " +
           "left to it, except where its feats differ from the rules (Gunner, 2024 Crossbow Expert).",
     scope: "world",
@@ -1041,8 +1043,8 @@ const SETTINGS_LAYOUT = [
   { title: "Chat & Turns", keys: ["privateRollOutcome", "turnSummary"] },
   { title: "Class Features", keys: ["invocations", "metamagic"],
     hint: "Other class features and feats go with the rule they use: Sneak Attack, Divine Smite, Divine and Primal Strike, " +
-          "Colossus Slayer, Savage Attacker and Stunning Strike under On-Hit Riders; the fighting styles and attack feats under " +
-          "Attack Rules; Parry, Uncanny Dodge and Deflect Attacks under Reaction Prompts; Evasion and Aura of Protection under " +
+          "Colossus Slayer, Savage Attacker and Stunning Strike under On-Hit Riders; the fighting styles, attack feats, Studied " +
+          "Attacks and Elusive under Attack Rules; Parry, Uncanny Dodge and Deflect Attacks under Reaction Prompts; Evasion and Aura of Protection under " +
           "Saving Throw Rules; Relentless Rage under Death Saves." },
   { title: "Other", major: true, keys: ["debug"] }
 ];

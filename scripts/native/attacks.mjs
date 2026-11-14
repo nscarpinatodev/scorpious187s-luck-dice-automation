@@ -8,6 +8,7 @@ import { addOnHitRiders, applySavageAttacker } from "./riders.mjs";
 import { offerReactions, reactionMultiplier } from "./reactions.mjs";
 import { applyWeaponMastery, CLEAVE_FLAG } from "./mastery.mjs";
 import { applyStunningStrike } from "./monk.mjs";
+import { applyStudiedAttacks } from "./fighter.mjs";
 import { autoRolledEnabled } from "./autoroll.mjs";
 import { applyRetaliation } from "./retaliation.mjs";
 import { rollExtras } from "./boosts.mjs";
@@ -98,6 +99,7 @@ export async function onAttackRolled(rolls, data) {
     await applyHitEffects(message, activity);
     await automateAttack(message, activity);
     await applyWeaponMastery(message, activity);
+    await applyStudiedAttacks(message, activity); // a miss: Advantage on the next attack at that creature
     await applyStunningStrike(message, activity);
     await applyInvocationsOnHit(message, activity); // Repelling Blast, Grasp of Hadar, Lance of Lethargy
   } catch (err) {
