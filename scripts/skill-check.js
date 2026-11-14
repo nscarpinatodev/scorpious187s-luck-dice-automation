@@ -437,7 +437,7 @@ async function promptLuckOnCheckFail(actor, rollTotal, dc, rollMsgId = null, rol
     if (luckEnabled && actorHasLuckDice(actor)) {
       debug(`promptLuckOnCheckFail: no dice available for ${actor.name} — auto-regaining`);
       await updateLuckUses(actor, 1);
-      await whisperLuckRegain(actor, "failed skill check with no dice available");
+      await whisperLuckRegain(actor, `failed ${rollType} with no dice available`);
     }
     return { finalTotal: rollTotal, passed: false };
   }
@@ -487,7 +487,7 @@ async function promptLuckOnCheckFail(actor, rollTotal, dc, rollMsgId = null, rol
       if (!hasRerolled && allBonusRolls.length === 0 && !inspirationUsed) {
         if (luckEnabled && actorHasLuckDice(actor)) {
           await updateLuckUses(actor, 1);
-          await whisperLuckRegain(actor, "failed skill check, ran out of dice");
+          await whisperLuckRegain(actor, `failed ${rollType}, ran out of dice`);
         }
       }
       return { finalTotal: currentTotal, passed: currentTotal >= dc };
@@ -530,7 +530,7 @@ async function promptLuckOnCheckFail(actor, rollTotal, dc, rollMsgId = null, rol
       // Only grant a luck die if no resources were already committed this attempt.
       if (hasLuck && !diceCommitted) {
         await updateLuckUses(actor, 1);
-        await whisperLuckRegain(actor, "kept failed skill check");
+        await whisperLuckRegain(actor, `kept failed ${rollType}`);
       }
       return { finalTotal: currentTotal, passed: false };
     }

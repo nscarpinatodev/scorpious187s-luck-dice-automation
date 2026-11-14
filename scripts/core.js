@@ -778,7 +778,8 @@ Hooks.once("init", () => {
   nativeToggle("opportunityAttacks", "Opportunity Attacks",
     "In combat, when a creature would move out of an enemy's reach, it stops at the last spot in reach and the enemy is offered " +
     "an opportunity attack (its player, or the GM for NPCs), if it has its reaction; then it carries on. Not provoked when " +
-    "Disengaged (a status the module applies from Disengage features, or toggle it on the token HUD), teleporting, or being moved.");
+    "Disengaged (a status the module applies from Disengage features, or toggle it on the token HUD), teleporting, or being moved. " +
+    "An enemy that's Shocked (Shocking Grasp) or Staggered (Brutal Strike), or can't take reactions, makes none.");
   nativeToggle("retaliation", "Retaliation Damage",
     "Armor of Agathys (while its temporary HP last) and Fire Shield (within 5 ft) deal their damage back to a creature that " +
     "hits the caster with a melee attack.");
@@ -1038,7 +1039,11 @@ const SETTINGS_LAYOUT = [
   { title: "Reactions & Roll Bonuses", keys: ["reactionPrompts", "rollBoosts", "opportunityAttacks"] },
   { title: "Targets, Areas & Walls", keys: ["targetConfirmation", "lingeringAreas", "clearInstantAreas", "wallSpells"] },
   { title: "Chat & Turns", keys: ["privateRollOutcome", "turnSummary"] },
-  { title: "Class Features", keys: ["invocations", "metamagic"] },
+  { title: "Class Features", keys: ["invocations", "metamagic"],
+    hint: "Other class features and feats go with the rule they use: Sneak Attack, Divine Smite, Divine and Primal Strike, " +
+          "Colossus Slayer, Savage Attacker and Stunning Strike under On-Hit Riders; the fighting styles and attack feats under " +
+          "Attack Rules; Parry, Uncanny Dodge and Deflect Attacks under Reaction Prompts; Evasion and Aura of Protection under " +
+          "Saving Throw Rules; Relentless Rage under Death Saves." },
   { title: "Other", major: true, keys: ["debug"] }
 ];
 
