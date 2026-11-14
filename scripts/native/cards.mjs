@@ -4,6 +4,7 @@
 import { RIDERS_FLAG, SAVAGE_FLAG } from "./riders.mjs";
 import { STUNNING_FLAG } from "./monk.mjs";
 import { STUDIED_FLAG } from "./fighter.mjs";
+import { SCULPT_FLAG } from "./wizard.mjs";
 import { REACTIONS_FLAG } from "./reactions.mjs";
 import { ATTACK_REASONS_FLAG, reasonsHTML } from "./advantage.mjs";
 import { MASTERY_RESULT_FLAG } from "./mastery.mjs";
@@ -90,6 +91,8 @@ export function injectNativeHistory(message, html) {
   if (stunning?.text) blocks.push(renderNoteRow("fa-hand-fist", "Stunning Strike", stunning.text));
   const studied = message.getFlag?.(MODULE_ID, STUDIED_FLAG);
   if (studied?.text) blocks.push(renderNoteRow("fa-eye", "Studied Attacks", studied.text));
+  const sculpt = message.getFlag?.(MODULE_ID, SCULPT_FLAG);
+  if (sculpt?.text) blocks.push(renderNoteRow("fa-shapes", "Sculpt Spells", sculpt.text));
   const savage = message.getFlag?.(MODULE_ID, SAVAGE_FLAG);
   if (savage) blocks.push(renderNoteRow("fa-dice", "Savage Attacker",
     `weapon dice rolled twice: ${savage.first} / ${savage.second} — used the ${savage.kept === "second" ? "second" : "first"}`));

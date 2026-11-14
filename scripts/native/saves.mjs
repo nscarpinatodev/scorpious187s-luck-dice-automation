@@ -6,6 +6,7 @@ import { applySaveEffects } from "./effects.mjs";
 import { clearAreasForUse } from "./areas.mjs";
 import { evasionApplies } from "./save-rules.mjs";
 import { chooseSaveMetamagic } from "./metamagic.mjs";
+import { chooseSculpted } from "./wizard.mjs";
 import { MODULE_ID, debug, promptChoice, getSaveAutomation, escapeHTML, pendingLuckDamage, socket, pendingLuckChecks, pendingSaveRequests, getPrimaryGM, activePlayerOwner, abilityLabel, resolveTarget, NO_DIALOG, antimagicStops, isLike } from "./shared.mjs";
 import { tokensInActivityArea, chooseAffected, regionsOf, needsConfirmation, confirmTargets } from "./targeting.mjs";
 
@@ -207,11 +208,16 @@ export async function automateSaves(activity, targets, usage, mode = getSaveAuto
 
   // Metamagic (metamagic.mjs): Careful Spell's creatures succeed without rolling; Heightened Spell's saves with disadvantage.
   const { careful, heightened, state: metamagic } = await chooseSaveMetamagic(activity, targets, usage);
-  const protectedTargets = targets.filter(t => careful.has(t.token));
-  const protectedOutcomes = protectedTargets
-    .map(t => ({ token: t.token, result: { passed: true, total: null, careful: true, carefulRules: metamagic?.rules } }));
+  // Sculpt Spells (wizard.mjs): the same for the creatures the evoker shapes the spell around.
+  const sculpted = await chooseSculpted(activity, targets, usage, { exclude: careful });
+  const protectedOutcomes = [
+    ...targets.filter(t => careful.has(t.token))
+      .map(t => ({ token: t.token, result: { passed: true, total: null, careful: true, carefulRules: metamagic?.rules } })),
+    ...targets.filter(t => sculpted.has(t.token) && !careful.has(t.token))
+      .map(t => ({ token: t.token, result: { passed: true, total: null, sculpted: true } }))
+  ];
   const everyone = targets;
-  targets = targets.filter(t => !careful.has(t.token)).map(t => t.token === heightened ? { ...t, heightened: true } : t);
+  targets = targets.filter(t => !careful.has(t.token) && !sculpted.has(t.token)).map(t => t.token === heightened ? { ...t, heightened: true } : t);
   // Antimagic (dnd5e 6.1+): a spell or Magical feature doesn't reach a creature in it — nothing to save
   // against. Its damage and effects are left off too (apply.mjs, effects.mjs).
   const shielded = new Set();
@@ -293,6 +299,11 @@ export async function applySaveDamage(activity, targets, outcome, usage = null) 
     // Careful Spell (2024): no damage where a success means half.
     if (result.careful && result.carefulRules !== "2014" && onSave === "half") {
       list.push({ ...t, saved, multiplier: 0, notes: ["Careful Spell"] });
+      continue;
+    }
+    // Sculpt Spells (2014 and 2024): no damage where a success means half.
+    if (result.sculpted && onSave === "half") {
+      list.push({ ...t, saved, multiplier: 0, notes: ["Sculpt Spells"] });
       continue;
     }
     // Evasion (the "saveRules" setting): none on a success, half on a failure.

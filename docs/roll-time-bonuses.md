@@ -85,8 +85,8 @@ These don't change the roll ahead of time. They show up as a prompt or a card no
 | --- | --- |
 | **A failed roll or a miss** | One prompt offers your Luck Dice, plus Bardic Inspiration, Guidance and Resistance (2014), Lucky, Indomitable, Protection of the Talisman and Seeking Spell, whichever you have. |
 | **After you hit** | Weapon Mastery effects (Topple, Sap, Vex, Slow, Push, Cleave) and Stunning Strike. Graze applies on a miss. |
-| **When you're hit** | Your reactions: Shield, Parry, Uncanny Dodge, Deflect Attacks and the others you have. The prompt goes to you, not the attacker. If you have the Lucky feat, you can also spend a point to make the attacker reroll. |
-| **When saves are settled** | Evasion, Careful Spell and Heightened Spell change the outcome or the damage. |
+| **When you're hit** | Your reactions: Shield, Parry, Uncanny Dodge, Deflect Attacks, Superior Hunter's Defense and the others you have. The prompt goes to you, not the attacker. If you have the Lucky feat, you can also spend a point to make the attacker reroll. |
+| **When saves are settled** | Evasion, Careful Spell, Heightened Spell and Sculpt Spells change the outcome or the damage. An evoker's spell with allies caught in it asks the wizard which creatures to shape it around. |
 | **When damage lands** | Death-save failures from damage at 0 HP, massive damage, Relentless Rage, and Gift of the Protectors. |
 
 ## What happens on the board

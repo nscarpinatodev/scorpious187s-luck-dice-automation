@@ -19,6 +19,9 @@
 //     Deflect Attacks   — an attack's Bludgeoning, Piercing or Slashing damage (any
 //                         type with Deflect Energy): reduce it by its roll, and if
 //                         that's all of it, a Focus Point may redirect it (monk.mjs);
+//     Superior Hunter's Defense (2024 Ranger 15, Hunter) — any damage: resistance to
+//                         its main type (the most of it, not already resisted) now,
+//                         and to that type until the end of the current turn;
 //   after damage (the GM's client):
 //     Hellish Rebuke    — damaged by a creature within 60 ft it can see: cast it
 //                         at the attacker (the save automation takes it from there).
@@ -38,7 +41,7 @@
 // Incapacitated, speed 0 and vulnerable to fire until the end of its next turn).
 
 import { requestApplyEffects } from "./effects.mjs";
-import { tokenDistance, hasLineOfSight, cantTakeReactions } from "./advantage.mjs";
+import { tokenDistance, hasLineOfSight, cantTakeReactions, rulesOf } from "./advantage.mjs";
 import { bardicDie, luckyFeat, usesLeft, useLuckyAgainst, withExtraD20, spendUses } from "./boosts.mjs";
 import { answerGift, dealInvocationDamage } from "./invocations.mjs";
 import { applyMasteryChange, pushDestination } from "./mastery.mjs";
@@ -100,6 +103,10 @@ export const REACTIONS = {
     label: (actor) => `Deflect Attacks (reduce the damage by 1d10 + ${(Number(actor?.system?.abilities?.dex?.mod) || 0) + (Number(actor?.classes?.monk?.system?.levels) || 0)})`,
     useful: ({ attack, types, actor }) => !!attack && deflectsTypes(actor, types)
   },
+  "superior-hunters-defense": {
+    when: "damage", label: (_actor, { defenseType }) => `Superior Hunter's Defense (resistance to ${defenseType} damage until the end of the turn)`,
+    useful: ({ defenseType, item }) => !!defenseType && rulesOf(item) !== "2014"   // 2014's is a choice of other features
+  },
   "hellish-rebuke": { when: "afterDamage", label: (_actor, { attackerName }) => `Hellish Rebuke at ${attackerName}`, useful: ({ attacker }) => !!attacker },
   // Invocations: used here (no dnd5e activity needed), spending the invocation's uses where it has them.
   "rebuke-of-the-talisman": {
@@ -115,6 +122,27 @@ export const REACTIONS = {
 };
 
 const tombHP = (actor) => 10 * (Number(actor?.classes?.warlock?.system?.levels ?? 0) || 0);
+
+/** Whether a creature already resists (or is immune to) a damage type. */
+const resists = (actor, type) => ["dr", "di"].some(k => {
+  const value = actor?.system?.traits?.[k]?.value;
+  return !!(value?.has?.(type) || (Array.isArray(value) && value.includes(type)));
+});
+
+/** Superior Hunter's Defense's type: the one dealing the most of this damage that it doesn't already resist. */
+export function hunterDefenseType(actor, damages) {
+  const totals = new Map();
+  for (const d of damages ?? []) if (d?.type && d.value > 0) totals.set(d.type, (totals.get(d.type) ?? 0) + d.value);
+  return [...totals].filter(([type]) => !resists(actor, type)).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+}
+
+/** Superior Hunter's Defense: resistance to the type until the end of the current turn (Foundry's "turnEnd", from when it's made). */
+export const hunterDefenseEffect = (type) => ({
+  name: `Superior Hunter's Defense (${type})`, img: "icons/svg/shield.svg", type: "base", transfer: false, disabled: false,
+  duration: { expiry: "turnEnd" },
+  system: { changes: [{ key: "system.traits.dr.value", type: "add", value: type }] },
+  flags: { [MODULE_ID]: { hunterDefense: type } }
+});
 
 /** Whether the actor has a spell slot (any level, or pact) left. */
 function hasSpellSlot(actor) {
@@ -138,7 +166,7 @@ export function reactionOptions(actor, context, when = "hit", { ally = false, re
     if (reaction.free ? !isRollBoostsEnabled() : !reactions) continue;
     if (reaction.setting && !reaction.setting()) continue;
     const item = reactionItem(actor, identifier);
-    if (!item || !reaction.useful({ ...context, actor })) continue;
+    if (!item || !reaction.useful({ ...context, actor, item })) continue;
     if (antimagicStops(actor, item)) continue; // dnd5e 6.1+: no spell or Magical feature in antimagic
     if (reaction.manual && item.system?.uses?.max && usesLeft(item) <= 0) continue;
     if (item.type === "spell" && (item.system?.level ?? 0) > 0 && !hasSpellSlot(actor)) continue;
@@ -215,7 +243,7 @@ export async function answerReaction(payload) {
   if (payload?.kind === "opportunity") return answerOpportunity(payload);
   if (payload?.kind === "wallSide") return answerWallSide(payload);
   if (payload?.kind === "gift") return answerGift(payload);
-  const { token, actor: actorUuid, options, attackerName, itemName, total, ac, when = "hit", targetName, types = [], attackerToken, damage, mainType, melee } = payload;
+  const { token, actor: actorUuid, options, attackerName, itemName, total, ac, when = "hit", targetName, types = [], attackerToken, damage, mainType, melee, defenseType } = payload;
   const { tokenDoc, actor } = await resolveTarget({ token, actor: actorUuid });
   if (!actor?.isOwner) return null;
   // Free ones (Lucky) don't need the reaction.
@@ -223,7 +251,7 @@ export async function answerReaction(payload) {
   if (!available.length) return null;
 
   const name = tokenDoc?.name ?? actor.name;
-  const context = { attackerName: attackerName ?? "the attacker", types };
+  const context = { attackerName: attackerName ?? "the attacker", types, defenseType };
   const what = when === "hit"
     ? `<strong>${escapeHTML(attackerName ?? "An attacker")}</strong> hit <strong>${escapeHTML(targetName ?? name)}</strong>
        ${itemName ? `with ${escapeHTML(itemName)} ` : ""}(${total}${finite(ac) ? ` vs AC ${ac}` : ""})`
@@ -270,6 +298,7 @@ export async function answerReaction(payload) {
     result.penalty = roll.total;
   }
   if (choice === "absorb-elements") result.types = types.filter(t => ELEMENTS.includes(t));
+  if (choice === "superior-hunters-defense" && defenseType) { result.types = [defenseType]; result.resistType = defenseType; }
   if (choice === "parry" || choice === "deflect-attacks") {
     const rolls = await used.activity.rollDamage?.({}, { configure: false }, { create: false });
     result.reduce = Math.max(0, (rolls ?? []).reduce((sum, r) => sum + (r.total ?? 0), 0));
@@ -438,7 +467,7 @@ function damageSource(message) {
 }
 
 /**
- * Before a target takes a damage card: Absorb Elements and Parry. Resolves with
+ * Before a target takes a damage card: Absorb Elements, Parry, Deflect Attacks, Superior Hunter's Defense, Tomb of Levistus. Resolves with
  * the damages to apply (adjusted) and notes for the Applied row.
  */
 export async function damageReactions(message, target, damages) {
@@ -449,13 +478,14 @@ export async function damageReactions(message, target, damages) {
   const { activity, melee, attackerName, attackerDoc } = damageSource(message);
   const attack = isLike(activity, "attack");
   const types = [...new Set(harmful.map(d => d.type).filter(Boolean))];
-  const options = reactionOptions(actor, { types, melee, attack }, "damage");
+  const defenseType = hunterDefenseType(actor, harmful);
+  const options = reactionOptions(actor, { types, melee, attack, defenseType }, "damage");
   if (!options.length) return { damages, notes: [] };
   // The damage it's about to take, and its main type (Deflect Attacks redirects that type when it takes it all).
   const damage = harmful.reduce((sum, d) => sum + d.value, 0);
   const mainType = [...harmful].sort((a, b) => b.value - a.value)[0]?.type ?? null;
   const answer = await askReaction(actor, { token: tokenDoc?.uuid ?? target.token, actor: actor.uuid, options, when: "damage", types, attackerName,
-    attackerToken: attackerDoc?.uuid ?? null, damage, mainType, melee });
+    attackerToken: attackerDoc?.uuid ?? null, damage, mainType, melee, defenseType });
   if (!answer?.identifier) return { damages, notes: [] };
   if (answer.tempHP) {
     // Tomb of Levistus: the temporary HP take the damage first (this is the GM, applying it); the ice comes after.
@@ -475,7 +505,9 @@ export async function damageReactions(message, target, damages) {
       if (left <= 0) break;
     }
   }
-  return { damages: adjusted, notes: [answer.label] };
+  // Superior Hunter's Defense: this damage is halved above; later damage of the type this turn, by the resistance.
+  const afterApply = answer.resistType ? () => actor.createEmbeddedDocuments("ActiveEffect", [hunterDefenseEffect(answer.resistType)]) : null;
+  return { damages: adjusted, notes: [answer.label], afterApply };
 }
 
 /** After damage is applied: Hellish Rebuke for those it hurt. Not awaited by the damage application. */

@@ -3,7 +3,7 @@ import { env } from "./env.mjs";
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { meleeReach, leavesReach, onPreMoveTokenOA, moveWithOpportunityAttacks, opportunityReactors, reachExit, splitPath, answerOpportunity, onDisengageUsed, onTurnEndDisengage, DISENGAGED } from "../scripts/native/opportunity.mjs";
-import { reactionOptions, offerReactions, damageReactions, onTurnStartReaction, onCombatEndedReactions, hasReaction, REACTION_USED, REACTIONS_FLAG } from "../scripts/native/reactions.mjs";
+import { reactionOptions, offerReactions, damageReactions, onTurnStartReaction, onCombatEndedReactions, hasReaction, REACTION_USED, REACTIONS_FLAG, hunterDefenseType } from "../scripts/native/reactions.mjs";
 import { retaliationsFor, recordAgathys, onActorUpdatedAgathys, AGATHYS_FLAG } from "../scripts/native/retaliation.mjs";
 import { onPreApplyDamage, onDamageAppliedDeath, deathSaveResult, correctDeathSave, onPostRollDeathSave } from "../scripts/native/deathsaves.mjs";
 import { rememberAreas, clearAreasForUse, onPreDeleteRegion, flashRollsRemovesAreas } from "../scripts/native/areas.mjs";
@@ -383,6 +383,36 @@ test("Cutting Words from an ally of the target turns a hit into a miss", async (
   assert.equal(message.rolls[0].total, 11);
   assert.match(message.flags[REACTIONS_FLAG][0].reaction, /Cutting Words .*\(16 → 11\)/);
   assert.equal(bard.actor.items[0].used.length, 1);
+});
+
+test("Superior Hunter's Defense (2024): resistance to the damage's main type now, and an effect for the rest of the turn", async () => {
+  settings.reactionPrompts = "all";
+  const shd = feat("superior-hunters-defense");
+  shd.system.source = { rules: "2024" };
+  const ranger = creature("Ranger", 0, 0, { disposition: 1, items: [shd] });
+  ranger.actor.system.traits = { dr: { value: new Set() }, di: { value: new Set() } };
+  const created = [];
+  ranger.actor.createEmbeddedDocuments = async (_type, data) => { created.push(...data); return data; };
+  let label = null;
+  prompts.choice = async (_t, _c, buttons) => { label = buttons.find(b => b.action === "superior-hunters-defense")?.label; return "superior-hunters-defense"; };
+  const damage = [{ value: 3, type: "fire", properties: [] }, { value: 11, type: "slashing", properties: [] }];
+  const result = await damageReactions({}, { token: ranger.doc.uuid, actor: ranger.actor.uuid }, damage);
+  assert.match(label, /resistance to slashing damage until the end of the turn/);
+  assert.deepEqual(result.damages.map(d => d.value), [3, 5]);
+  assert.match(result.notes[0], /Superior Hunter's Defense/);
+  assert.equal(shd.used.length, 1);                                   // used through dnd5e (its reaction activity)
+  await result.afterApply();
+  assert.deepEqual(created[0].system.changes, [{ key: "system.traits.dr.value", type: "add", value: "slashing" }]);
+  assert.equal(created[0].duration.expiry, "turnEnd");
+
+  // The type: the most damage it doesn't already resist; nothing when it resists it all. 2014's isn't this reaction.
+  ranger.actor.system.traits.dr.value.add("slashing");
+  assert.equal(hunterDefenseType(ranger.actor, damage), "fire");
+  ranger.actor.system.traits.di.value.add("fire");
+  assert.equal(hunterDefenseType(ranger.actor, damage), null);
+  assert.deepEqual(reactionOptions(ranger.actor, { types: ["fire", "slashing"], defenseType: null }, "damage"), []);
+  shd.system.source.rules = "2014";
+  assert.deepEqual(reactionOptions(ranger.actor, { types: ["cold"], defenseType: "cold" }, "damage"), []);
 });
 
 test("Absorb Elements halves the elemental damage; Parry reduces it", async () => {

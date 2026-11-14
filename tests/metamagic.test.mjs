@@ -6,6 +6,7 @@ import {
   chooseSaveMetamagic, rerollDice, doubledDuration, offerEmpowered, metamagicForUsage, METAMAGIC_FLAG
 } from "../scripts/native/metamagic.mjs";
 import { applySaveDamage } from "../scripts/native/saves.mjs";
+import { chooseSculpted, castLevelOf, SCULPT_FLAG } from "../scripts/native/wizard.mjs";
 import { rollExtras } from "../scripts/native/boosts.mjs";
 
 const { settings, uuids, makeToken, rollResults, dialogs, messages, damageRoll } = env;
@@ -263,4 +264,57 @@ test("Distant Spell through the rifle: doubled on the rifle's range; the spell o
   adjustCastRange(channeled, "distant");
   assert.equal(channeled.range.value, 480);
   assert.equal(real.range.value, 240);
+});
+
+// ── Sculpt Spells (Evocation wizards), under Saving Throw Rules ──
+test("Sculpt Spells: an Evocation spell with allies in it; up to 1 + the level cast, allies ticked; none otherwise", async () => {
+  settings.saveRules = true;
+  const evoker = { uuid: `Actor.w${++seq}`, name: "Evoker", isOwner: true, items: [item("sculpt-spells")], effects: [], system: { abilities: {} } };
+  const activity = cast(evoker, { level: 3, save: true });
+  activity.item.system.school = "evo";
+  const me = makeToken("me", "Evoker", { disposition: 1 }).document;
+  activity.getUsageToken = () => ({ document: me });
+  const ally = makeToken("ally2", "Ally", { disposition: 1 }), friend = makeToken("friend", "Friend", { disposition: 1 });
+  const foe = makeToken("foe2", "Foe", { disposition: -1 });
+  const targets = [ally, friend, foe].map(t => ({ token: t.document.uuid, name: t.document.name }));
+  const usage = { id: "use9", system: { scaling: 1 }, flags: {}, async setFlag(_m, k, v) { usage.flags[k] = v; } };
+  assert.equal(castLevelOf(activity.item, usage), 4);
+  let offered = null;
+  dialogs.push((ui) => { offered = ui.checkboxes.map(c => [c.value, c.checked]); return "ok"; });
+  const picked = await chooseSculpted(activity, targets, usage, { exclude: new Set([friend.document.uuid]) });  // Careful has the friend
+  assert.deepEqual(offered, [["ally2", true], ["foe2", false]]);
+  assert.deepEqual([...picked], [ally.document.uuid]);
+  assert.match(usage.flags[SCULPT_FLAG].text, /^Ally succeeds on the save/);
+
+  // Not asked: no ally in it, not Evocation, no feature, or the setting off.
+  const quiet = async (a, t) => {
+    let asked = false;
+    dialogs.length = 0; dialogs.push(() => { asked = true; return "ok"; });
+    const out = await chooseSculpted(a, t, usage);
+    dialogs.length = 0;
+    assert.equal(asked, false);
+    return out.size;
+  };
+  assert.equal(await quiet(activity, [{ token: foe.document.uuid, name: "Foe" }]), 0);
+  settings.saveRules = false;
+  assert.equal(await quiet(activity, targets), 0);
+  settings.saveRules = true; activity.item.system.school = "abj";
+  assert.equal(await quiet(activity, targets), 0);
+});
+
+test("Sculpt Spells' creatures take no damage on a half-damage spell (2014 and 2024)", async () => {
+  const seen = {};
+  const a = makeToken("sa", "A", { disposition: 1 }), b = makeToken("sb", "B", { disposition: -1 });
+  for (const [id, t] of [["a", a], ["b", b]]) {
+    t.document.actor = { uuid: `Actor.${id}`, name: id, items: [], statuses: new Set(),
+      system: { _source: { attributes: { hp: { value: 30, temp: 0, tempmax: 0 } } } },
+      calculateDamage: (d, { multiplier }) => ({ amount: d.reduce((s, x) => s + x.value * multiplier, 0) }),
+      async applyDamage(d, { multiplier }) { seen[id] = d.reduce((s, x) => s + x.value * multiplier, 0); } };
+  }
+  const message = { id: "dmg2", rolls: [damageRoll(20)], flags: {}, setFlag: async (_m, k, v) => { message.flags[k] = v; } };
+  messages.set("dmg2", message);
+  const fireball = { save: { ability: new Set(["dex"]), dc: { value: 15 } }, damage: { parts: [{}], onSave: "half" }, rollDamage: async () => [{ parent: message }] };
+  const targets = [{ token: a.document.uuid, name: "A" }, { token: b.document.uuid, name: "B" }];
+  await applySaveDamage(fireball, targets, new Map([[a.document.uuid, { passed: true, sculpted: true }], [b.document.uuid, { passed: true }]]));
+  assert.deepEqual(seen, { a: 0, b: 10 });
 });

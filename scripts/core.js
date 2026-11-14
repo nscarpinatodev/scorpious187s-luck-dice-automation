@@ -688,7 +688,9 @@ Hooks.once("init", () => {
           "Advantage from Magic Resistance (spells and magic items), Gnome Cunning, Duergar Resilience, Dwarven Resilience " +
           "(poison), Fey Ancestry (charmed), Brave (frightened) and 2014 Danger Sense — dnd5e already covers Rage, 2024 Danger " +
           "Sense and Gnomish Cunning. Aura of Protection adds the paladin's Charisma modifier to the saves of allies in its " +
-          "aura. Evasion: no damage on a successful Dexterity save, half on a failure (with Save Automation on Full). Shown " +
+          "aura. Evasion: no damage on a successful Dexterity save, half on a failure (with Save Automation on Full). Sculpt " +
+          "Spells: an evoker's Evocation spell with allies in it asks which creatures (up to 1 + the spell's level) succeed " +
+          "on the save and take no damage where a success means half (with Save Automation on). Shown " +
           "in the roll window and on the card. With Automated Conditions 5e automating statuses, automatic failures are " +
           "left to it.",
     scope: "world",
@@ -929,7 +931,8 @@ Hooks.once("init", () => {
     name: "Reaction Prompts When Hit",
     hint: "Offer reactions when they'd matter — on a hit: Shield, Defensive Duelist, Uncanny Dodge, and allies' Cutting " +
           "Words and Silvery Barbs; before damage: Absorb Elements, Parry, Deflect Attacks (redirecting the attack with a " +
-          "Focus Point when it takes all the damage); after damage: Hellish Rebuke. Asked of the " +
+          "Focus Point when it takes all the damage), 2024 Superior Hunter's Defense (resistance to the damage's main type until " +
+          "the end of the turn); after damage: Hellish Rebuke. Asked of the " +
           "creature's player (or the GM); each is used through dnd5e. One reaction per creature until its next turn " +
           "(shared with opportunity attacks), shown in combat by a Reaction Used status you can toggle on the token HUD.",
     scope: "world",
@@ -1044,8 +1047,8 @@ const SETTINGS_LAYOUT = [
   { title: "Class Features", keys: ["invocations", "metamagic"],
     hint: "Other class features and feats go with the rule they use: Sneak Attack, Divine Smite, Divine and Primal Strike, " +
           "Colossus Slayer, Savage Attacker and Stunning Strike under On-Hit Riders; the fighting styles, attack feats, Studied " +
-          "Attacks and Elusive under Attack Rules; Parry, Uncanny Dodge and Deflect Attacks under Reaction Prompts; Evasion and Aura of Protection under " +
-          "Saving Throw Rules; Relentless Rage under Death Saves." },
+          "Attacks and Elusive under Attack Rules; Parry, Uncanny Dodge, Deflect Attacks and Superior Hunter's Defense under Reaction " +
+          "Prompts; Evasion, Aura of Protection and Sculpt Spells under Saving Throw Rules; Relentless Rage under Death Saves." },
   { title: "Other", major: true, keys: ["debug"] }
 ];
 
