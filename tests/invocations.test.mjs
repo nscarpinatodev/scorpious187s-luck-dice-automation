@@ -70,6 +70,12 @@ test("Agonizing Blast: Eldritch Blast's damage gains the Charisma modifier, once
   assert.deepEqual(damage(blast), ["1d10", "@abilities.cha.mod"]);
   assert.deepEqual(damage(blast, ["1d10", "@abilities.cha.mod"]), ["1d10", "@abilities.cha.mod"]);
   assert.deepEqual(damage(spell("fire-bolt")), ["1d10"]);
+  // The PHB's enchantment on another cantrip: that one already has dnd5e's bonus, Eldritch Blast gets none.
+  const fireBolt = spell("fire-bolt", { name: "Fire Bolt (Agonizing)", effects: [{ type: "enchantment", name: "Agonizing Blast" }] });
+  warlock.actor.items.push(blast, fireBolt);
+  assert.deepEqual(damage(blast), ["1d10"]);
+  assert.deepEqual(damage(fireBolt, ["1d10", "@abilities.cha.mod"]), ["1d10", "@abilities.cha.mod"]);
+  warlock.actor.items.length = 1;
   settings.invocations = false;
   assert.deepEqual(damage(blast), ["1d10"]);
 });

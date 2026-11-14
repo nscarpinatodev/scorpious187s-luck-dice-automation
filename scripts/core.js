@@ -925,7 +925,8 @@ Hooks.once("init", () => {
   game.settings.register(MODULE_ID, "reactionPrompts", {
     name: "Reaction Prompts When Hit",
     hint: "Offer reactions when they'd matter — on a hit: Shield, Defensive Duelist, Uncanny Dodge, and allies' Cutting " +
-          "Words and Silvery Barbs; before damage: Absorb Elements, Parry; after damage: Hellish Rebuke. Asked of the " +
+          "Words and Silvery Barbs; before damage: Absorb Elements, Parry, Deflect Attacks (redirecting the attack with a " +
+          "Focus Point when it takes all the damage); after damage: Hellish Rebuke. Asked of the " +
           "creature's player (or the GM); each is used through dnd5e. One reaction per creature until its next turn " +
           "(shared with opportunity attacks), shown in combat by a Reaction Used status you can toggle on the token HUD.",
     scope: "world",

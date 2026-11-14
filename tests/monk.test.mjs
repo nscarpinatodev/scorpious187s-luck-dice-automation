@@ -1,7 +1,7 @@
 import { env } from "./env.mjs";
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { stunningStrikeWeapon, pointsLeft, applyStunningStrike, STUNNING_FLAG } from "../scripts/native/monk.mjs";
+import { stunningStrikeWeapon, pointsLeft, applyStunningStrike, STUNNING_FLAG, deflectsTypes, onPreRollDamageRedirect, redirectCandidates } from "../scripts/native/monk.mjs";
 import { saveEffectApplies } from "../scripts/native/effects.mjs";
 import { claimRiderUse } from "../scripts/native/riders.mjs";
 
@@ -79,4 +79,26 @@ test("offered after a hit while there are points; used through dnd5e at the crea
   settings.onHitRiders = false;
   await applyStunningStrike(card(), fist);
   assert.equal(asked, 1);
+});
+
+
+test("Deflect Attacks: which types, who a redirect can reach, and its damage left untouched unless it's a redirect", () => {
+  const monk = { items: [] };
+  assert.equal(deflectsTypes(monk, ["slashing", "fire"]), true);
+  assert.equal(deflectsTypes(monk, ["fire"]), false);
+  monk.items.push({ system: { identifier: "deflect-energy" } });
+  assert.equal(deflectsTypes(monk, ["fire"]), true);
+
+  const doc = (id, x, extra = {}) => ({ id, x, actor: { statuses: new Set() }, ...extra });
+  const scene = { tokens: [] };
+  const me = doc("me", 0), attacker = doc("orc", 1), near = doc("ally", 1), far = doc("far", 5), dead = doc("dead", 1, { actor: { statuses: new Set(["dead"]) } });
+  for (const d of [me, attacker, near, far, dead]) { d.parent = scene; scene.tokens.push(d); }
+  const distance = (a, b) => Math.abs(a.x - b.x) * 5;
+  const sight = (_a, b) => b.id !== "far";
+  assert.deepEqual(redirectCandidates(me, attacker, true, { distance, sight }).map(d => d.id), ["orc", "ally"]);   // the attacker first
+  assert.deepEqual(redirectCandidates(me, attacker, false, { distance, sight }).map(d => d.id), ["orc", "ally"]);  // 60 ft, but not unseen
+
+  const config = { subject: { uuid: "not-a-redirect" }, rolls: [{ options: { type: "bludgeoning" } }] };
+  onPreRollDamageRedirect(config);
+  assert.equal(config.rolls[0].options.type, "bludgeoning");
 });

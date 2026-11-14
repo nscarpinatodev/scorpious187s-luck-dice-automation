@@ -16,6 +16,9 @@
 //   before damage is applied (the GM's client, as it applies the damage):
 //     Absorb Elements   — acid, cold, fire, lightning or thunder: resistance to it;
 //     Parry             — a melee attack: reduce the damage by the Parry roll;
+//     Deflect Attacks   — an attack's Bludgeoning, Piercing or Slashing damage (any
+//                         type with Deflect Energy): reduce it by its roll, and if
+//                         that's all of it, a Focus Point may redirect it (monk.mjs);
 //   after damage (the GM's client):
 //     Hellish Rebuke    — damaged by a creature within 60 ft it can see: cast it
 //                         at the attacker (the save automation takes it from there).
@@ -42,6 +45,7 @@ import { applyMasteryChange, pushDestination } from "./mastery.mjs";
 import { isTriggerClient } from "./lingering.mjs";
 import { answerOpportunity } from "./opportunity.mjs";
 import { answerWallSide } from "./walls.mjs";
+import { deflectsTypes, offerRedirect } from "./monk.mjs";
 import {
   LDA, MODULE_ID, escapeHTML, promptChoice, getReactionPrompts, socket, getPrimaryGM, activePlayerOwner,
   resolveTarget, combineRolls, isRollBoostsEnabled, getKeptD20Result, isInvocationsEnabled, antimagicStops, hasStockEffect, isLike
@@ -91,6 +95,11 @@ export const REACTIONS = {
     useful: ({ types }) => types.some(t => ELEMENTS.includes(t))
   },
   "parry": { when: "damage", label: () => "Parry (reduce the damage)", useful: ({ melee }) => melee },
+  "deflect-attacks": {
+    when: "damage",
+    label: (actor) => `Deflect Attacks (reduce the damage by 1d10 + ${(Number(actor?.system?.abilities?.dex?.mod) || 0) + (Number(actor?.classes?.monk?.system?.levels) || 0)})`,
+    useful: ({ attack, types, actor }) => !!attack && deflectsTypes(actor, types)
+  },
   "hellish-rebuke": { when: "afterDamage", label: (_actor, { attackerName }) => `Hellish Rebuke at ${attackerName}`, useful: ({ attacker }) => !!attacker },
   // Invocations: used here (no dnd5e activity needed), spending the invocation's uses where it has them.
   "rebuke-of-the-talisman": {
@@ -187,7 +196,8 @@ async function useReaction(item, actor, tokenDoc, { aim } = {}) {
   const spell = item.type === "spell";
   const results = spell
     ? await activity.use({}, {}, {})
-    : await activity.use({ consume: true, subsequentActions: false }, { configure: false }, {});
+    // `consume` left out: dnd5e's default spends the action and resources (6.1 wants an object, not `true`).
+    : await activity.use({ subsequentActions: false }, { configure: false }, {});
   if (!results) return null;
   const usage = results.message;
   if (REACTIONS[item.system.identifier]?.when === "hit" && (usage?.system?.getEffects?.()?.length || activity.effects?.length)) {
@@ -205,7 +215,7 @@ export async function answerReaction(payload) {
   if (payload?.kind === "opportunity") return answerOpportunity(payload);
   if (payload?.kind === "wallSide") return answerWallSide(payload);
   if (payload?.kind === "gift") return answerGift(payload);
-  const { token, actor: actorUuid, options, attackerName, itemName, total, ac, when = "hit", targetName, types = [], attackerToken } = payload;
+  const { token, actor: actorUuid, options, attackerName, itemName, total, ac, when = "hit", targetName, types = [], attackerToken, damage, mainType, melee } = payload;
   const { tokenDoc, actor } = await resolveTarget({ token, actor: actorUuid });
   if (!actor?.isOwner) return null;
   // Free ones (Lucky) don't need the reaction.
@@ -260,9 +270,16 @@ export async function answerReaction(payload) {
     result.penalty = roll.total;
   }
   if (choice === "absorb-elements") result.types = types.filter(t => ELEMENTS.includes(t));
-  if (choice === "parry") {
+  if (choice === "parry" || choice === "deflect-attacks") {
     const rolls = await used.activity.rollDamage?.({}, { configure: false }, { create: false });
     result.reduce = Math.max(0, (rolls ?? []).reduce((sum, r) => sum + (r.total ?? 0), 0));
+    // The card shows what it took off, not the prompt's formula.
+    result.label = `${choice === "parry" ? "Parry" : "Deflect Attacks"} (−${result.reduce} damage)`;
+  }
+  if (choice === "deflect-attacks" && finite(damage) && result.reduce >= damage) {
+    const note = await offerRedirect(actor, tokenDoc, { attackerDoc: aim, melee: !!melee, type: mainType, distance: tokenDistance, sight: hasLineOfSight })
+      .catch(err => { console.error(`[${MODULE_ID}] deflect attacks:`, err); return null; });
+    if (note) result.label = `${result.label}; ${note}`;
   }
   return result;
 }
@@ -429,11 +446,16 @@ export async function damageReactions(message, target, damages) {
   const { actor, tokenDoc } = await resolveTarget(target);
   const harmful = damages.filter(d => d.value > 0 && !(d.type in CONFIG.DND5E.healingTypes));
   if (!asksFor(actor, mode) || !harmful.length) return { damages, notes: [] };
-  const { melee, attackerName } = damageSource(message);
+  const { activity, melee, attackerName, attackerDoc } = damageSource(message);
+  const attack = isLike(activity, "attack");
   const types = [...new Set(harmful.map(d => d.type).filter(Boolean))];
-  const options = reactionOptions(actor, { types, melee }, "damage");
+  const options = reactionOptions(actor, { types, melee, attack }, "damage");
   if (!options.length) return { damages, notes: [] };
-  const answer = await askReaction(actor, { token: tokenDoc?.uuid ?? target.token, actor: actor.uuid, options, when: "damage", types, attackerName });
+  // The damage it's about to take, and its main type (Deflect Attacks redirects that type when it takes it all).
+  const damage = harmful.reduce((sum, d) => sum + d.value, 0);
+  const mainType = [...harmful].sort((a, b) => b.value - a.value)[0]?.type ?? null;
+  const answer = await askReaction(actor, { token: tokenDoc?.uuid ?? target.token, actor: actor.uuid, options, when: "damage", types, attackerName,
+    attackerToken: attackerDoc?.uuid ?? null, damage, mainType, melee });
   if (!answer?.identifier) return { damages, notes: [] };
   if (answer.tempHP) {
     // Tomb of Levistus: the temporary HP take the damage first (this is the GM, applying it); the ice comes after.

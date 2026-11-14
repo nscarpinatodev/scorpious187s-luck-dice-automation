@@ -78,7 +78,7 @@ test("Uncanny Dodge: noted with a half-damage multiplier for that target", async
   await offerReactions(message, attacker);
   assert.equal(reactionMultiplier(message, rogue.token.document.uuid), 0.5);
   assert.equal(message.system.targets[0].ac, 14);
-  assert.deepEqual(rogue.actor.used[0][1], { consume: true, subsequentActions: false });
+  assert.deepEqual(rogue.actor.used[0][1], { subsequentActions: false }); // dnd5e 6.1 wants `consume` an object; its default spends the reaction
 });
 
 test("declining, players-only mode, and one reaction until the creature's turn", async () => {

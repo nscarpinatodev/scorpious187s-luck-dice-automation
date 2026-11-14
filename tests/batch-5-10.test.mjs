@@ -411,6 +411,60 @@ test("Absorb Elements halves the elemental damage; Parry reduces it", async () =
   assert.deepEqual(untouched.damages, healing);
 });
 
+test("Deflect Attacks: an attack's B/P/S damage (any type with Deflect Energy) reduced; all of it lets a Focus Point redirect it", async () => {
+  settings.reactionPrompts = "all";
+  const used = [];
+  const reduce = { activation: { type: "reaction" }, effects: [], async use() { return { message: { system: {} } }; },
+    async rollDamage() { return [{ total: rollResults.shift() ?? 4 }]; } };
+  const redirect = { type: "save", name: "Redirect", uuid: "Item.deflect.Activity.r", effects: [], consumption: { targets: [{ type: "itemUses", target: "focus" }] },
+    async use(usage, dialog) { used.push({ dialog, targets: [...game.user.targets].map(t => t.id) }); return { message: { id: "redirect1" } }; } };
+  const deflect = { id: "deflect", name: "Deflect Attacks", type: "feat", system: { identifier: "deflect-attacks", activities: new Map([["a", reduce], ["b", redirect]]) } };
+  reduce.item = deflect; redirect.item = deflect;
+  const focus = { id: "focus", system: { identifier: "monks-focus", uses: { max: 5, value: 3 } } };
+  const monk = creature("Monk", 1, 1, { disposition: 1, items: [deflect, focus] });
+  Object.assign(monk.actor.items, { get: (id) => monk.actor.items.find(i => i.id === id) });
+  monk.actor.system.abilities = { dex: { mod: 3 } };
+  monk.actor.classes = { monk: { system: { levels: 5 } } };
+  const orc = creature("Orc", 2, 1);
+  const attackCard = { getAssociatedActivity: () => ({ type: "attack", attack: { type: { value: "melee" } }, getUsageToken: () => orc.doc }), rolls: [{ options: {} }] };
+  const target = { token: monk.doc.uuid, actor: monk.actor.uuid };
+  const asked = [];
+  let redirectTo = "none";
+  prompts.choice = async (title, _content, buttons) => {
+    asked.push([title, buttons.map(b => b.label)]);
+    return title === "Deflect Attacks" ? redirectTo : buttons.find(b => b.action === "deflect-attacks") ? "deflect-attacks" : "none";
+  };
+
+  // Not against fire (no Deflect Energy), nor against a spell's save damage.
+  await damageReactions(attackCard, target, [{ value: 9, type: "fire", properties: [] }]);
+  await damageReactions({ getAssociatedActivity: () => ({ type: "save" }), rolls: [{ options: {} }] }, target, [{ value: 9, type: "slashing", properties: [] }]);
+  assert.deepEqual(asked, []);
+
+  // Reduced by its roll; not all of it, so no redirect.
+  rollResults.push(4);
+  const partly = await damageReactions(attackCard, target, [{ value: 9, type: "slashing", properties: [] }]);
+  assert.deepEqual(partly.damages.map(d => d.value), [5]);
+  assert.match(asked[0][1][0], /Deflect Attacks \(reduce the damage by 1d10 \+ 8\)/);
+  assert.equal(asked.length, 1);
+  assert.match(partly.notes[0], /^Deflect Attacks \(−4 damage\)/);
+
+  // All of it: the redirect is offered (the attacker first), used through dnd5e at the creature picked.
+  monk.actor.statuses.delete(REACTION_USED);
+  asked.length = 0; rollResults.push(12); redirectTo = orc.token.id;
+  const all = await damageReactions(attackCard, target, [{ value: 9, type: "piercing", properties: [] }]);
+  assert.deepEqual(all.damages.map(d => d.value), [0]);
+  assert.deepEqual(asked[1], ["Deflect Attacks", ["Orc", "Don't Redirect"]]);
+  assert.deepEqual(used, [{ dialog: { configure: false }, targets: [orc.token.id] }]);
+  assert.match(all.notes[0], /redirected at Orc/);
+
+  // With Deflect Energy, any type.
+  monk.actor.statuses.delete(REACTION_USED);
+  monk.actor.items.push({ id: "energy", system: { identifier: "deflect-energy" } });
+  asked.length = 0; rollResults.push(1); redirectTo = "none";
+  await damageReactions(attackCard, target, [{ value: 9, type: "fire", properties: [] }]);
+  assert.equal(asked.length, 1);
+});
+
 // ── Retaliation ──
 test("Armor of Agathys (while its temp HP last) and Fire Shield (within 5 ft) hit back at a melee attacker", async () => {
   settings.retaliation = true;

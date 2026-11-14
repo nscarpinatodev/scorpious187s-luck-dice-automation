@@ -107,7 +107,9 @@ export function onPreRollDamageInvocations(config) {
   const base = config?.rolls?.find(r => r?.base) ?? config?.rolls?.[0];
   if (!actor || !base) return;
   const parts = (base.parts ??= []);
-  if (invocationApplies(actor, activity.item, "agonizing-blast") && !parts.some(p => /abilities\.cha\.mod|@mod\b/.test(String(p)))) {
+  // The PHB's enchantment adds "@abilities.cha.mod" to the cantrip it marks (dnd5e's damage bonus), so
+  // that one's left alone; with it on another cantrip, Eldritch Blast gets nothing.
+  if (invocationApplies(actor, activity.item, "agonizing-blast", "Agonizing") && !parts.some(p => /abilities\.cha\.mod|@mod\b/.test(String(p)))) {
     parts.push("@abilities.cha.mod");
     debug(`agonizing blast: ${actor.name}'s ${activity.item.name} adds the Charisma modifier`);
   }

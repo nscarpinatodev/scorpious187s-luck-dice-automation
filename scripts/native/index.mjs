@@ -24,6 +24,7 @@ import { onDisengageUsed, onTurnEndDisengage, onPreMoveTokenOA } from "./opportu
 import { recordAgathys, onActorUpdatedAgathys, retaliateGM } from "./retaliation.mjs";
 import { onTurnStartDeathSave, onPreApplyDamage, onDamageAppliedDeath, onPostRollDeathSave } from "./deathsaves.mjs";
 import { onPreApplyDamageRelentless, onDamageAppliedRelentless, onRestRelentless } from "./barbarian.mjs";
+import { onPreRollDamageRedirect } from "./monk.mjs";
 import { rememberAreas, clearAreaGM, tagAreaGM, onPreDeleteRegion, onConcentrationEnded } from "./areas.mjs";
 import { onTurnStartSummary } from "./turn-summary.mjs";
 import { recordWallSpell, buildWallsGM, onRegionDeletedWalls, onPreUseActivityWalls, onPreRollAttackWalls } from "./walls.mjs";
@@ -149,6 +150,7 @@ Hooks.once("ready", () => {
   Hooks.on("dnd5e.preRollDamageV2", onPreRollDamage); // automatic critical hits; never cancels
   Hooks.on("dnd5e.preRollDamageV2", onPreRollDamageFeats); // 2024 Crossbow Expert's off-hand damage; never cancels
   Hooks.on("dnd5e.preRollDamageV2", onPreRollDamageCleave); // a Cleave attack's damage: no ability modifier; never cancels
+  Hooks.on("dnd5e.preRollDamageV2", onPreRollDamageRedirect); // Deflect Attacks' redirect: the attack's damage type; never cancels
   Hooks.on("dnd5e.preRollDamageV2", skipAutoRolledDamageDialog); // never cancels
   Hooks.on("dnd5e.rollAttackV2", (rolls) =>
     consumeAttackMarks(rolls?.[0]?.parent).catch(err => console.error(`[${MODULE_ID}] attack marks:`, err)));

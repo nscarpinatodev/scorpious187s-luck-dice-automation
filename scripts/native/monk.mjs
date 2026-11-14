@@ -121,3 +121,79 @@ export async function applyStunningStrike(message, activity) {
   await message.setFlag(MODULE_ID, STUNNING_FLAG, { text });
   console.log(`[${MODULE_ID}] stunning strike: ${actor.name} — ${text}`);
 }
+
+// ── Deflect Attacks (2024 Monk 3) ─────────────────────────────────────────────
+// A reaction (reactions.mjs, under the "reactionPrompts" setting) when an attack's damage is about to land
+// and includes Bludgeoning, Piercing or Slashing (any type with Deflect Energy, Monk 13): its Reduce
+// activity is rolled and taken off the damage, like Parry. If that takes the damage to 0 and a Focus
+// Point is left, the monk may redirect it: a creature within 5 ft (a melee attack) or 60 ft in sight (a
+// ranged one) makes the Redirect activity's Dexterity save — through the save automation — or takes two
+// Martial Arts dice + Dexterity, of the attack's damage type.
+
+const DEFLECTABLE = new Set(["bludgeoning", "piercing", "slashing"]);
+
+/** Whether the monk can deflect these damage types: any type with Deflect Energy, else Bludgeoning, Piercing or Slashing. */
+export function deflectsTypes(actor, types = []) {
+  if (feature(actor, "deflect-energy")) return types.length > 0;
+  return types.some(t => DEFLECTABLE.has(t));
+}
+
+// The damage type a Redirect deals this time, by its activity uuid (read by its damage hook).
+const redirectTypes = new Map();
+
+/** dnd5e.preRollDamageV2 — a Redirect's damage takes the deflected attack's type. Never cancels. */
+export function onPreRollDamageRedirect(config) {
+  const type = redirectTypes.get(config?.subject?.uuid);
+  if (!type) return;
+  for (const roll of config.rolls ?? []) {
+    roll.options ??= {};
+    Object.assign(roll.options, { type, types: [type] });
+  }
+}
+
+/** The creatures a redirect can go to: within 5 ft (melee) or 60 ft in sight (ranged), not the monk; the attacker first. */
+export function redirectCandidates(monkDoc, attackerDoc, melee, { distance, sight }) {
+  if (!monkDoc?.parent) return [];
+  const range = melee ? 5 : 60;
+  const all = [...(monkDoc.parent.tokens ?? [])].filter(doc => doc.actor && doc.id !== monkDoc.id && !doc.actor.statuses?.has?.("dead")
+    && !(doc.hidden && !game.user.isGM) && distance(monkDoc, doc) <= range && (melee || sight(monkDoc, doc)));
+  return all.sort((a, b) => (b.id === attackerDoc?.id) - (a.id === attackerDoc?.id));
+}
+
+/**
+ * After Deflect Attacks took the damage to 0 (on the monk's client): offer to spend a Focus Point and
+ * redirect it. Resolves with a note for the Applied row, or null.
+ */
+export async function offerRedirect(actor, monkDoc, { attackerDoc, melee, type, distance, sight }) {
+  const item = feature(actor, "deflect-attacks");
+  const saves = activitiesOf(item).filter(a => isLike(a, "save"));
+  const anyType = !DEFLECTABLE.has(type);
+  const redirect = saves.find(a => anyType ? /any/i.test(a.name ?? "") : !/any/i.test(a.name ?? "")) ?? saves[0];
+  if (!redirect || !monkDoc) return null;
+  const left = pointsLeft(actor, redirect);
+  if (left !== null && left < 1) return null;
+  const candidates = redirectCandidates(monkDoc, attackerDoc, melee, { distance, sight });
+  if (!candidates.length) return null;
+  const choice = await promptChoice("Deflect Attacks",
+    `<p>The damage is down to 0. Spend 1 Focus Point to redirect the attack's force${left !== null ? ` (${left} left)` : ""}?
+     The creature makes a Dexterity save or takes two Martial Arts dice + Dexterity of ${escapeHTML(type ?? "its")} damage.</p>`,
+    [...candidates.map(c => ({ action: c.id, label: c.name })), { action: "no", label: "Don't Redirect" }]);
+  const target = candidates.find(c => c.id === choice);
+  if (!target) return null;
+  const previous = [...(game.user.targets ?? [])].map(t => t.id);
+  canvas.tokens?.setTargets([target.id], { mode: "replace" });
+  let results = null;
+  try { results = await useClaimed(redirect, {}, { configure: false }); }
+  finally { canvas.tokens?.setTargets(previous, { mode: "replace" }); }
+  if (!results?.message) return null;
+  const mode = getSaveAutomation();
+  if (mode === "off") return `redirected at ${target.name} (its save is on the card)`;
+  if (type) redirectTypes.set(redirect.uuid, type);
+  try {
+    const outcome = await automateSaves(redirect, [{ actor: target.actor.uuid, token: target.uuid, name: target.name }], results.message, mode);
+    const result = outcome?.get?.(target.uuid);
+    return result ? `redirected at ${target.name} (${result.passed ? "saved" : "hit"})` : `redirected at ${target.name}`;
+  } finally {
+    redirectTypes.delete(redirect.uuid);
+  }
+}
