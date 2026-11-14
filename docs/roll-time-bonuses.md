@@ -1,0 +1,109 @@
+# Roll-Time Bonuses
+
+*A guide for players. Written for Luck Dice Automation 2.6.0, using dnd5e without Midi-QoL. With Midi-QoL active, Midi handles most of this instead.*
+
+Many bonuses at our table don't show on your character sheet. They're worked out at the moment you roll, from where everyone is standing and what's going on right then, and they appear on that roll.
+
+This page explains where to see them, what gets checked when you roll, and what to look at if one seems to be missing.
+
+## An example: Aura of Protection
+
+Your rogue is standing 10 feet from the party's paladin, who has a Charisma modifier of +3. A fireball goes off and you're asked for a Dexterity saving throw.
+
+| Your character sheet | The roll window and the chat card |
+| --- | --- |
+| Dexterity saving throw: **+7** | `1d20 + 7 + 3` |
+| No sign of the paladin's aura. The sheet only shows what's always true about you. | **Bonus:** Aura of Protection (Brother Tam) +3. The module saw the paladin within 10 ft and added +3 to this roll. |
+
+If you step 15 feet away and roll again, the bonus isn't there. If the paladin is knocked unconscious, it isn't there. Nothing needs to be switched on or off: each roll looks at the board fresh.
+
+## Where to see what was applied
+
+- **The roll window.** When the window opens before you roll, a line under the roll lists what the module found, such as *Advantage: Faerie Fire* or *Bonus: Aura of Protection +3*. You can still change the roll there.
+- **The chat card.** The same line appears on the card the roll posts, so everyone can see why it came out the way it did. This is also where you look if you skipped the roll window.
+- **The roll's formula.** A flat bonus is part of the formula itself. Hover over or expand the total to see it.
+
+> **Why it works this way.** The alternative is putting temporary effects on everyone's sheets and updating them every time a token moves. That's a lot of background work for Foundry, and it leaves stale bonuses behind when something is missed. Checking at the moment of the roll is always current and leaves nothing to clean up.
+
+## What's checked when you roll
+
+Your GM chooses which of these are on. The setting each one belongs to is in brackets, in case you need to ask.
+
+### Attack rolls: advantage and disadvantage *(Attack Rules)*
+
+| | |
+| --- | --- |
+| **Range** | Disadvantage at long range, and on a ranged attack with an enemy within 5 ft of you. Crossbow Expert, Sharpshooter, Spell Sniper and Gunner remove these where their rules say so. An attack beyond long range is stopped with a message. |
+| **Your conditions** | Prone, Restrained or Blinded give disadvantage. Frightened gives disadvantage while you can see what frightened you. Invisible gives advantage. |
+| **Your target's conditions** | Advantage against a target that's Restrained, Blinded, Paralyzed, Stunned, Unconscious or Petrified. Against a Prone target: advantage within 5 ft, disadvantage farther away. Disadvantage against a target that's Invisible or Dodging. |
+| **Features and spells** | Reckless Attack (yours, or the target's), Faerie Fire, Guiding Bolt, and disadvantage with a Heavy weapon you're too small or too weak to wield well. |
+| **One-time marks** | Vex, Sap and Stunning Strike's advantage. These apply to the next attack only and are used up by it. |
+| **Cover** | Spell Sniper and Sharpshooter ignore half and three-quarters cover. The card shows the target's AC without the cover bonus. |
+
+Advantage and disadvantage from any sources cancel out, as the rules say. Checks about your target only work with exactly one target selected.
+
+### Attack rolls: other changes
+
+| | |
+| --- | --- |
+| **Improved Pact Weapon** | +1 to hit with a pact weapon that isn't already magical. *(Eldritch Invocations)* |
+| **Solid walls** | An attack through Wall of Force, Wall of Stone, Wall of Ice or Forcecage is stopped before anything is spent. *(Wall Spells Block)* |
+
+### Saving throws *(Saving Throw Rules)*
+
+| | |
+| --- | --- |
+| **Aura of Protection** | The best Charisma modifier (at least +1) among friendly paladins within 10 ft, or 30 ft from 18th level. Two paladins don't stack; you get the higher one. A paladin who's incapacitated gives nothing. |
+| **Automatic failure** | Strength and Dexterity saves while you're Paralyzed, Stunned, Unconscious or Petrified. The roll is still shown, and Legendary Resistance can still turn it. |
+| **Advantage from traits** | Magic Resistance, Gnome Cunning, Duergar Resilience, Dwarven Resilience, Fey Ancestry, Brave, and 2014 Danger Sense, each against what it covers. Saves made to end a condition count too. |
+
+### Concentration saves
+
+| | |
+| --- | --- |
+| **Everything above** | A concentration save is a Constitution save, so Aura of Protection applies to it. |
+| **Extended Spell (2024)** | Advantage on concentration saves for an extended spell. *(Metamagic)* |
+
+### Damage rolls
+
+| | |
+| --- | --- |
+| **Automatic critical hits** | A hit on a Paralyzed or Unconscious target from within 5 ft is a critical hit. *(Automatic Critical Hits)* |
+| **Fighting styles and feats** | Great Weapon Fighting on two-handed melee damage. Two-Weapon Fighting, and 2024 Crossbow Expert, add your modifier to off-hand damage. *(Attack Rules)* |
+| **Cleave** | The second attack's damage leaves out your ability modifier, unless it's negative. *(Weapon Mastery)* |
+| **Invocations** | Agonizing Blast adds your Charisma modifier to each beam. Improved Pact Weapon adds +1. *(Eldritch Invocations)* |
+| **Transmuted Spell** | The damage type you picked replaces the spell's. *(Metamagic)* |
+| **Marks** | Hunter's Mark and Hex are added automatically when every creature you hit carries your mark. *(On-Hit Riders)* |
+| **Choices on a hit** | Sneak Attack, Divine Smite, Divine Strike, Primal Strike and Colossus Slayer are offered as checkboxes when the hit's damage is rolled, where they apply. Savage Attacker rolls your weapon dice twice and keeps the better total. *(On-Hit Riders)* |
+
+## What's offered after a roll
+
+These don't change the roll ahead of time. They show up as a prompt or a card note once the result is known.
+
+| | |
+| --- | --- |
+| **A failed roll or a miss** | One prompt offers your Luck Dice, plus Bardic Inspiration, Guidance and Resistance (2014), Lucky, Indomitable, Protection of the Talisman and Seeking Spell, whichever you have. |
+| **After you hit** | Weapon Mastery effects (Topple, Sap, Vex, Slow, Push, Cleave) and Stunning Strike. Graze applies on a miss. |
+| **When you're hit** | Your reactions: Shield, Parry, Uncanny Dodge, Deflect Attacks and the others you have. The prompt goes to you, not the attacker. If you have the Lucky feat, you can also spend a point to make the attacker reroll. |
+| **When saves are settled** | Evasion, Careful Spell and Heightened Spell change the outcome or the damage. |
+| **When damage lands** | Death-save failures from damage at 0 HP, massive damage, Relentless Rage, and Gift of the Protectors. |
+
+## What happens on the board
+
+These are the only things you'll see happen without rolling anything yourself.
+
+- Opportunity attacks are offered when a creature moves out of reach.
+- Lingering spell areas, such as Spirit Guardians or Cloud of Daggers, affect creatures as they move into them or take turns in them, following each spell's wording.
+- Repeat saves against a condition are rolled at the end of your turn.
+- Concentration saves after damage, and death saves at the start of your turn, are rolled for you. You still get your Luck Dice prompt.
+- Wall spells become real walls that block movement, and sight where the spell says so.
+
+## If a bonus seems to be missing
+
+1. **Is your token on the map?** The module measures between tokens on the same scene. Rolling from your sheet with no token on the scene means there's nothing to measure.
+2. **Is it really in range?** Distance is measured between the nearest squares of the two tokens, and height counts. A creature flying 15 ft up is 15 ft away from you.
+3. **Is the token marked friendly?** Auras go to tokens with the same disposition as the paladin. A companion set to neutral doesn't count. Ask your GM to change it.
+4. **Did you select exactly one target?** Attack checks about the target, such as Prone or Faerie Fire, are skipped when several targets are selected.
+5. **Did you roll through the sheet?** A roll typed into chat, such as `/r 1d20+5`, isn't a saving throw or an attack to Foundry, so nothing is added to it.
+6. **Did advantage cancel out?** Any disadvantage on the same roll cancels the advantage, however many sources of each there are. The card lists both.
+7. **Is the setting on?** If the card shows no line from the module at all, the GM may have turned that rule off.
