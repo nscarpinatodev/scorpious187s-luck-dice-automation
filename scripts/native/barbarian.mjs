@@ -15,11 +15,24 @@
 
 import { requestSaves } from "./saves.mjs";
 import { effectsFrom, rulesOf } from "./advantage.mjs";
-import { MODULE_ID, debug, isDeathSavesEnabled, activePlayerOwner, isLike } from "./shared.mjs";
+import { MODULE_ID, debug, isDeathSavesEnabled, activePlayerOwner, isLike, isRollBoostsEnabled } from "./shared.mjs";
 
 export const RELENTLESS_FLAG = "relentlessRage"; // on a 2014 Relentless Rage item: uses since the last rest
 
 const feature = (actor, identifier) => actor?.items?.find?.(i => i.system?.identifier === identifier) ?? null;
+
+/**
+ * Indomitable Might (Barbarian 18), under the "rollBoosts" setting: a Strength check (2024: or Strength save)
+ * whose total is below the Strength score uses the score. Resolves with the score to use, or null.
+ */
+export function indomitableMight(actor, ability, kind, total) {
+  if (!isRollBoostsEnabled() || ability !== "str") return null;
+  const item = feature(actor, "indomitable-might");
+  if (!item || (kind === "save" && rulesOf(item) === "2014")) return null;
+  if (kind !== "check" && kind !== "save") return null;
+  const score = Number(actor?.system?.abilities?.str?.value);
+  return Number.isFinite(score) && Number(total) < score ? score : null;
+}
 
 /** Whether the creature is raging: an active effect from its Rage feature. */
 export const isRaging = (actor) => effectsFrom(actor, "rage").length > 0;

@@ -345,6 +345,9 @@ async function riderActivity(choice, activity) {
  */
 export async function addOnHitRiders(message, activity, card) {
   if ((!isOnHitRidersEnabled() && !isInvocationsEnabled()) || !message || !card || message.getFlag?.(MODULE_ID, RIDERS_FLAG)) return;
+  // Every target missed (damage rolled anyway — 2024 Potent Cantrip's half): no hit to ride on.
+  const evaluated = card.system?.evaluatedTargets ?? [];
+  if (evaluated.length && evaluated.every(t => t.isMiss)) return;
   const riders = await eligibleRiders(activity, card);
   if (!riders.length) return;
   const automatic = riders.filter(r => r.mode === "mark" || r.mode === "auto");

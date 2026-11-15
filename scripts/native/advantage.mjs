@@ -16,6 +16,7 @@
 //                a reckless creature), Faerie Fire, Guiding Bolt (its mark is used
 //                up by the attack), a Heavy weapon in small or weak hands, Studied
 //                Attacks (fighter.mjs: after a miss, the next attack at that creature);
+//                Grappler (the feat: a creature it's grappling);
 //                a target with Elusive (Rogue 18) that isn't Incapacitated: no
 //                Advantage from any source;
 //   feats      — Spell Sniper (range; 2024: enemies within 5 ft), Crossbow Expert and
@@ -169,6 +170,12 @@ export function effectsFrom(actor, identifier) {
 const STAGGERED_EFFECT = "uacly0JAXLVwAS6y"; // Brutal Strike's "Staggered", of its three effects
 const isStaggered = (effect) => [effect._stats?.duplicateSource, effect._stats?.compendiumSource]
   .some(uuid => String(uuid ?? "").endsWith(`.ActiveEffect.${STAGGERED_EFFECT}`)) || /\bstagger/i.test(effect.name ?? "");
+export const STAGGER_USED = "staggerSaveUsed"; // on a Staggered effect: its save disadvantage has been spent
+
+/** Brutal Strike's Staggered effect on a creature whose next save still has its disadvantage (save-rules.mjs). */
+export function staggeredSave(actor) {
+  return effectsFrom(actor, "brutal-strike").find(e => isStaggered(e) && !e.getFlag?.(MODULE_ID, STAGGER_USED)) ?? null;
+}
 
 /** Whether the creature can't make opportunity attacks: Shocked (2024 Shocking Grasp) or Staggered (Brutal Strike). */
 export function cantMakeOpportunityAttacks(actor) {
@@ -291,6 +298,17 @@ function nearbyFoe(fx) {
     && !INCAPACITATING.some(s => t.actor.statuses?.has?.(s)) && tokenDistance(me, t) <= adjacent()) ?? null;
 }
 
+/**
+ * Whether a creature is grappled by this one (the Grappler feat): its Grappled effect came from it. A Grappled
+ * status with no source recorded (set from the token HUD) counts when the creature is within 5 ft.
+ */
+function grappledBy(targetActor, attacker, distance) {
+  if (!targetActor?.statuses?.has?.("grappled")) return false;
+  const sources = [...(targetActor.effects ?? [])].filter(e => !e.disabled && e.statuses?.has?.("grappled")).map(sourceActor).filter(Boolean);
+  if (sources.length) return sources.some(a => a === attacker || (a.uuid && a.uuid === attacker?.uuid));
+  return Number.isFinite(distance) && distance <= adjacent();
+}
+
 /** Frightened, with the source of its fear on the scene and in sight. Unknown sources don't count. */
 function frightenedBySeenSource(fx) {
   const actor = fx.actor;
@@ -385,6 +403,7 @@ export function attackReasons(activity, config = {}) {
   }
   if (targetActor && effectsFrom(targetActor, "reckless-attack").length) advantage.push("Target attacking recklessly");
   if (targetActor && effectsFrom(targetActor, "faerie-fire").length) advantage.push("Faerie Fire");
+  if (targetActor && hasFeat(fx.actor, "grappler") && grappledBy(targetActor, fx.actor, distance)) advantage.push("Grappler");
   const bolt = targetActor ? effectsFrom(targetActor, "guiding-bolt")[0] : null;
   if (bolt) { advantage.push("Guiding Bolt"); consume.push(bolt.uuid); }
   addMasteryReasons(fx, { advantage, disadvantage, consume });
@@ -662,8 +681,10 @@ async function consumeMarks(uuids = []) {
     try {
       const effect = await fromUuid(uuid);
       if (!effect) continue;
-      if (effect.isOwner) await effect.delete().catch(() => null); // already gone
-      else socket?.emit("consumeAttackMark", { uuid });
+      if (!effect.isOwner) socket?.emit("consumeAttackMark", { uuid });
+      // Staggered stays (it still stops opportunity attacks): only its save disadvantage is spent.
+      else if (isStaggered(effect)) await effect.setFlag(MODULE_ID, STAGGER_USED, true).catch(() => null);
+      else await effect.delete().catch(() => null); // already gone
     } finally { consuming.delete(uuid); }
   }
 }
@@ -672,6 +693,7 @@ async function consumeMarks(uuids = []) {
 export async function consumeAttackMarkGM({ uuid }) {
   const effect = await fromUuid(uuid);
   if (!effect) return;
+  if (isStaggered(effect)) return effect.setFlag(MODULE_ID, STAGGER_USED, true);
   const mastery = effect.getFlag?.(MODULE_ID, MASTERY_FLAG)?.kind;
   if (sourceItem(effect)?.system?.identifier === "guiding-bolt" || ["sap", "vex", "studied-attacks", "stunning-strike", "silvery-barbs"].includes(mastery)) await effect.delete();
 }

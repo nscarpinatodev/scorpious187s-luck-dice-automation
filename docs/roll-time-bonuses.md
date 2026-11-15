@@ -36,7 +36,7 @@ Your GM chooses which of these are on. The setting each one belongs to is in bra
 | **Range** | Disadvantage at long range, and on a ranged attack with an enemy within 5 ft of you. Crossbow Expert, Sharpshooter, Spell Sniper and Gunner remove these where their rules say so. An attack beyond long range is stopped with a message. |
 | **Your conditions** | Prone, Restrained or Blinded give disadvantage. Frightened gives disadvantage while you can see what frightened you. Invisible gives advantage. |
 | **Your target's conditions** | Advantage against a target that's Restrained, Blinded, Paralyzed, Stunned, Unconscious or Petrified. Against a Prone target: advantage within 5 ft, disadvantage farther away. Disadvantage against a target that's Invisible or Dodging. |
-| **Features and spells** | Reckless Attack (yours, or the target's), Faerie Fire, Guiding Bolt, and disadvantage with a Heavy weapon you're too small or too weak to wield well. |
+| **Features and spells** | Reckless Attack (yours, or the target's), Faerie Fire, Guiding Bolt, Grappler against a creature you're grappling, and disadvantage with a Heavy weapon you're too small or too weak to wield well. |
 | **One-time marks** | Vex, Sap, Studied Attacks (after a Fighter misses a creature), Stunning Strike's advantage and Silvery Barbs' advantage (which also works on your next check or save). These apply to the next attack only and are used up by it. |
 | **Elusive** | A Rogue with Elusive can't be attacked with advantage from any source, unless they're Incapacitated. The card lists the advantage that was ignored. |
 | **Cover** | Spell Sniper and Sharpshooter ignore half and three-quarters cover. The card shows the target's AC without the cover bonus. |
@@ -57,6 +57,8 @@ Advantage and disadvantage from any sources cancel out, as the rules say. Checks
 | **Aura of Protection** | The best Charisma modifier (at least +1) among friendly paladins within 10 ft, or 30 ft from 18th level. Two paladins don't stack; you get the higher one. A paladin who's incapacitated gives nothing. |
 | **Automatic failure** | Strength and Dexterity saves while you're Paralyzed, Stunned, Unconscious or Petrified. The roll is still shown, and Legendary Resistance can still turn it. |
 | **Advantage from traits** | Magic Resistance, Gnome Cunning, Duergar Resilience, Dwarven Resilience, Fey Ancestry, Brave, and 2014 Danger Sense, each against what it covers. Saves made to end a condition count too. |
+| **Countercharm (2014)** | While a bard performs it, the bard and friends within 30 ft who can hear it have advantage on saves against being charmed or frightened. |
+| **Staggered** | A Barbarian's Brutal Strike (Staggering Blow) gives you disadvantage on your next save. |
 
 ### Concentration saves
 
@@ -75,6 +77,7 @@ Advantage and disadvantage from any sources cancel out, as the rules say. Checks
 | **Invocations** | Agonizing Blast adds your Charisma modifier to each beam. Improved Pact Weapon adds +1. *(Eldritch Invocations)* |
 | **Transmuted Spell** | The damage type you picked replaces the spell's. *(Metamagic)* |
 | **Marks** | Hunter's Mark and Hex are added automatically when every creature you hit carries your mark. *(On-Hit Riders)* |
+| **Potent Cantrip (2024)** | An Evoker's damaging cantrip that misses still deals half its damage, with no other effect. *(Attack Rules)* |
 | **Choices on a hit** | Sneak Attack, Divine Smite, Divine Strike, Primal Strike and Colossus Slayer are offered as checkboxes when the hit's damage is rolled, where they apply. Savage Attacker rolls your weapon dice twice and keeps the better total. *(On-Hit Riders)* |
 
 ## What's offered after a roll
@@ -83,12 +86,14 @@ These don't change the roll ahead of time. They show up as a prompt or a card no
 
 | | |
 | --- | --- |
-| **A failed roll or a miss** | One prompt offers your Luck Dice, plus Bardic Inspiration, Guidance and Resistance (2014), Lucky, Indomitable, Protection of the Talisman and Seeking Spell, whichever you have. |
+| **A failed roll or a miss** | One prompt offers your Luck Dice, plus Bardic Inspiration, Guidance and Resistance (2014), Lucky, Indomitable, Protection of the Talisman, Dark One's Own Luck and Seeking Spell, whichever you have. |
+| **A low Strength check** | Indomitable Might (Barbarian 18) uses your Strength score in place of a lower total, on Strength checks (and, with the 2024 rules, Strength saves). |
+| **When you fail a save against charm or fear** | With the 2024 rules, you or a bard within 30 ft can use Countercharm to reroll the save with advantage. Your Luck Dice prompt follows if it still fails. |
 | **After you hit** | Weapon Mastery effects (Topple, Sap, Vex, Slow, Push, Cleave) and Stunning Strike. Graze applies on a miss. |
 | **When you're hit** | Your reactions: Shield, Parry, Uncanny Dodge, Deflect Attacks, Superior Hunter's Defense and the others you have. The prompt goes to you, not the attacker. If you have the Lucky feat, you can also spend a point to make the attacker reroll. |
 | **When you succeed on a save or check** | An enemy within 60 ft who can see you may cast Silvery Barbs: you reroll and keep the lower. If that turns it into a failure, your Luck Dice prompt follows as usual. Whoever cast it then picks a creature to have advantage on its next attack, check or save within a minute. |
 | **When you cast a spell** | An enemy within 60 ft who can see you may cast Counterspell. With the 2024 spell you make a Constitution save, and on a failure the spell fizzles without spending its slot. With the 2014 spell it's countered outright up to the Counterspell's level, otherwise the counterspeller makes a spellcasting ability check; a countered spell's slot is still spent. Spells cast with Subtle Spell can't be countered. |
-| **When saves are settled** | Evasion, Careful Spell, Heightened Spell and Sculpt Spells change the outcome or the damage. An evoker's spell with allies caught in it asks the wizard which creatures to shape it around. |
+| **When saves are settled** | Evasion, Careful Spell, Heightened Spell, Sculpt Spells and Potent Cantrip change the outcome or the damage. A cantrip from an Evoker with Potent Cantrip still deals half damage on a successful save. An evoker's spell with allies caught in it asks the wizard which creatures to shape it around. |
 | **When damage lands** | Death-save failures from damage at 0 HP, massive damage, Relentless Rage, and Gift of the Protectors. |
 
 ## What happens on the board

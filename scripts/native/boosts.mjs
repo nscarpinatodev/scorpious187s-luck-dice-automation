@@ -16,6 +16,7 @@
 // through dnd5e's effects tray code (effects.mjs), so nobody has to apply them by hand. Extras that
 // replace the roll (Lucky, Indomitable) are offered only before anything has been added to it.
 
+//   Dark One's Own Luck — a Fiend warlock's +1d10 to a check or save, from its uses.
 // Offered the same way under other settings: Protection of the Talisman (+1d4 to a failed save;
 // "invocations") and Seeking Spell (reroll a missed spell attack's d20; "metamagic").
 
@@ -167,6 +168,17 @@ export function boostsFor(actor, kind, { spell: spellAttack = false } = {}) {
       if (!better) return null;
       await spendUse(lucky);
       return { roll: better, label: "Lucky: another d20", detail: `d20: ${extra.total}${getKeptD20Result(better) === extra.total ? " (used)" : " (kept the first)"}` };
+    }
+  });
+  // Dark One's Own Luck (Warlock, Fiend Patron): +1d10 to a check or save, from its uses (2014: once a short rest;
+  // 2024: the Charisma modifier a long rest) — once per roll, as each extra is.
+  const luck = kind === "check" || kind === "save" ? [...(actor?.items ?? [])].find(i => i.system?.identifier === "dark-ones-own-luck") : null;
+  if (luck && usesLeft(luck) > 0 && !antimagicStops(actor, luck)) boosts.push({
+    id: "dark-ones-own-luck", label: `Dark One's Own Luck (+1d10, ${usesLeft(luck)} left)`,
+    async use() {
+      const bonusRoll = await rollOne("1d10");
+      await spendUse(luck);
+      return { bonusRoll, label: "Added 1d10 Dark One's Own Luck", detail: `+${bonusRoll.total}` };
     }
   });
   const indomitable = kind === "save" ? itemWithUses(actor, "indomitable") : null;

@@ -39,6 +39,7 @@ import { answerReaction, pendingReactions, extendReaction, onTurnStartReaction, 
 import { onPreRollAttack, onPreRollDamage, onPreRollDamageFeats, onRenderAttackDialog, consumeAttackMarks, consumeRollMarks, consumeAttackMarkGM } from "./advantage.mjs";
 import { onPreRollSave, onPreRollCheck, onRenderSaveDialog, installAutoFail } from "./save-rules.mjs";
 import { installCounterspell } from "./counterspell.mjs";
+import { onCountercharmUsed } from "./bard.mjs";
 import { rollExtras, markBoostTargets, markBardicGM, consumeBoostGM, endBoostSpellGM } from "./boosts.mjs";
 import { onPreRollAttackInvocations, onPreRollDamageInvocations, onDamageAppliedGift, onTurnStartCloak, onMaddeningHexUsed } from "./invocations.mjs";
 import { onPreUseMetamagic, onRenderUsageDialog, onMetamagicUsed, onPreRollDamageMetamagic, onPreRollConcentrationMetamagic } from "./metamagic.mjs";
@@ -243,6 +244,7 @@ Hooks.once("ready", () => {
     rememberAreas(activity, results);
     recordWallSpell(activity, usageConfig, results).catch(err => console.error(`[${MODULE_ID}] wall spells:`, err));
     onDisengageUsed(activity).catch(err => console.error(`[${MODULE_ID}] disengage:`, err));
+    onCountercharmUsed(activity).catch(err => console.error(`[${MODULE_ID}] countercharm:`, err)); // 2014: the performance
     recordAgathys(activity, usageConfig).catch(err => console.error(`[${MODULE_ID}] armor of agathys:`, err));
     markBoostTargets(activity, results).catch(err => console.error(`[${MODULE_ID}] roll boosts:`, err));
     const followUp = usageConfig?.subsequentActions !== false;

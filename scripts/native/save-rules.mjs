@@ -15,6 +15,9 @@
 //                       (frightened); 2014 Danger Sense (Dexterity, unless Blinded, Deafened or
 //                       Incapacitated). What a save is "against" is read from the statuses its
 //                       activity's effects apply, so saves to end the condition count too;
+//   disadvantage      — Brutal Strike's Staggering Blow: the next save (the Staggered effect stays, for its
+//                       no-opportunity-attacks part; only this is spent);
+//   2014 Countercharm — advantage against being Frightened or Charmed while a bard performs (bard.mjs);
 //   a bonus           — Aura of Protection: the best Charisma modifier (minimum +1) among paladins,
 //                       not incapacitated, friendly to the creature and within 10 ft of it (30 ft
 //                       with Aura Expansion or from 18th level). 2024's own effect already gives the
@@ -26,10 +29,12 @@
 // the save automation's damage (saves.mjs). A save folded into its spell's card (dnd5e's summary)
 // shows its reasons there (cards.mjs).
 
-import { ac5eCovers, tokenDistance, rulesOf, mergeRollMode, ensureFinalModeHook, reasonsHTML, silveryMark, SAVE_REASONS_FLAG } from "./advantage.mjs";
+import { ac5eCovers, tokenDistance, rulesOf, mergeRollMode, ensureFinalModeHook, reasonsHTML, silveryMark, staggeredSave, SAVE_REASONS_FLAG } from "./advantage.mjs";
+import { countercharmFor } from "./bard.mjs";
 import { MODULE_ID, debug, escapeHTML, isSaveRulesEnabled } from "./shared.mjs";
 
 export { SAVE_REASONS_FLAG };
+export const SAVE_AGAINST_FLAG = "saveAgainst"; // on a save card: the statuses its activity applies (for 2024 Countercharm)
 const AUTO_FAIL = [["paralyzed", "Paralyzed"], ["stunned", "Stunned"], ["unconscious", "Unconscious"], ["petrified", "Petrified"]];
 const INCAPACITATING = ["incapacitated", "paralyzed", "petrified", "stunned", "unconscious", "dead"];
 
@@ -109,7 +114,7 @@ export function auraOfProtection(actor, tokenDoc) {
  * `source` is what it's against (saveSource); `tokenDoc` the creature's token, for its aura.
  */
 export function saveReasons(actor, ability, source = {}, { tokenDoc = null } = {}) {
-  const advantage = [], disadvantage = [], bonuses = [];
+  const advantage = [], disadvantage = [], bonuses = [], consume = [];
   let autoFail = null, autoFailBy = null;
   if (ability === "str" || ability === "dex") {
     autoFail = AUTO_FAIL.find(([status]) => has(actor, status))?.[1] ?? null;
@@ -129,9 +134,15 @@ export function saveReasons(actor, ability, source = {}, { tokenDoc = null } = {
   if (sense && ability === "dex" && rulesOf(sense) === "2014" && !has(actor, "blinded") && !has(actor, "deafened") && !incapacitated(actor)) {
     advantage.push("Danger Sense");
   }
+  // 2014 Countercharm (bard.mjs): a performing bard's advantage on saves against being Charmed or Frightened.
+  const bard = countercharmFor(actor, tokenDoc, statuses);
+  if (bard) advantage.push(`Countercharm (${bard})`);
+  // Brutal Strike's Staggering Blow: disadvantage on the next save (then spent, the effect itself staying).
+  const staggered = staggeredSave(actor);
+  if (staggered) { disadvantage.push("Staggered"); consume.push(staggered.uuid); }
   const aura = auraOfProtection(actor, tokenDoc);
   if (aura) bonuses.push(aura);
-  return { advantage, disadvantage, autoFail, autoFailBy, bonuses };
+  return { advantage, disadvantage, autoFail, autoFailBy, bonuses, consume };
 }
 
 /** Evasion: a Dexterity save against half damage, by a creature with it that isn't incapacitated. */
@@ -160,16 +171,22 @@ function saverToken(actor, message) {
  */
 export function onPreRollSave(config, dialog, message) {
   const actor = config?.subject;
+  // What the save is against, noted on its card for 2024 Countercharm's reaction afterwards (bard.mjs) — whatever the settings.
+  let source = null;
+  try {
+    source = saveSource(message);
+    if (message && source.statuses?.size) foundry.utils.setProperty(message, `data.flags.${MODULE_ID}.${SAVE_AGAINST_FLAG}`, [...source.statuses]);
+  } catch { /* not resolvable */ }
   const rules = isSaveRulesEnabled(), barbs = silveryMark(actor);
   // Without Saving Throw Rules, only a Silvery Barbs mark (Reaction Prompts) is read.
   if (!rules && !barbs) return;
   if (!actor?.system?.abilities || !config.ability) return;
   let reasons;
   try {
-    reasons = rules ? saveReasons(actor, config.ability, saveSource(message), { tokenDoc: saverToken(actor, message) })
-      : { advantage: [], disadvantage: [], autoFail: null, autoFailBy: null, bonuses: [] };
+    reasons = rules ? saveReasons(actor, config.ability, source ?? saveSource(message), { tokenDoc: saverToken(actor, message) })
+      : { advantage: [], disadvantage: [], autoFail: null, autoFailBy: null, bonuses: [], consume: [] };
   } catch (err) { console.error(`[${MODULE_ID}] save rules:`, err); return; }
-  if (barbs) { reasons.advantage.push("Silvery Barbs"); reasons.consume = [barbs.uuid]; }
+  if (barbs) { reasons.advantage.push("Silvery Barbs"); reasons.consume = [...(reasons.consume ?? []), barbs.uuid]; }
   // Reasons an earlier hook noted on this roll (2024 Extended Spell's, on a concentration save) stay with these.
   const prior = foundry.utils.getProperty(message ?? {}, `data.flags.${MODULE_ID}.${SAVE_REASONS_FLAG}`);
   if (prior?.advantage?.length) reasons.advantage = [...prior.advantage, ...reasons.advantage];

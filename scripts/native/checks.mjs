@@ -6,6 +6,9 @@ import { correctDeathSave } from "./deathsaves.mjs";
 import { rollExtras } from "./boosts.mjs";
 import { autoFailOf } from "./save-rules.mjs";
 import { offerSilveryBarbs } from "./reactions.mjs";
+import { offerCountercharm } from "./bard.mjs";
+import { indomitableMight } from "./barbarian.mjs";
+import { SAVE_AGAINST_FLAG } from "./save-rules.mjs";
 import { LDA, MODULE_ID, debug, getKeptD20Result, HISTORY_FLAG, requestRollActors, isConcentrationBreakEnabled, finishCardHistory, cardReporter, recordCardStep, canUseLuck, promptChoice, escapeHTML, getLegendaryResistance } from "./shared.mjs";
 
 // ── Saves, checks and concentration ──────────────────────────────────────────
@@ -28,7 +31,10 @@ export const D20_TESTS = {
  * Rolls without a DC are skipped — nothing says they failed — and so are
  * automatic failures (save-rules.mjs), which no bonus can turn around.
  * A success is first offered to the roller's enemies' Silvery Barbs (reactions.mjs):
- * a reroll keeping the lower, which can make it a failure.
+ * a reroll keeping the lower, which can make it a failure. A Strength check or save
+ * below the Strength score uses the score with Indomitable Might (barbarian.mjs). A
+ * save failed against being Charmed or Frightened is offered to 2024 Countercharm
+ * (bard.mjs) before the roller's own prompts.
  */
 export async function onD20TestRolled(rolls, data, test) {
   try {
@@ -39,12 +45,24 @@ export async function onD20TestRolled(rolls, data, test) {
     if (requestRollActors.has(actor.id)) return; // the roll-request window runs its own prompt
     if (autoFailOf(roll)) return;
 
+    let total = Number(roll.total ?? 0);
+    let barbed = false;
+    // Indomitable Might: the Strength score in place of a lower total — with a DC or without (a contest), and
+    // again after a reroll below.
+    const might = async () => {
+      const score = indomitableMight(actor, data?.ability, test.kind, total);
+      if (score === null) return;
+      const bonus = await new Roll(String(score - total)).evaluate();
+      const raised = LDA.combineRolls(roll, bonus);
+      await recordCardStep(message, raised, total, { kind: "check", label: `Indomitable Might: the Strength score (${score})`, total: Number(raised.total ?? score) });
+      roll = raised; total = Number(roll.total ?? score); barbed = true;
+    };
+    await might();
+
     const dc = Number(roll.options?.target);
     if (!Number.isFinite(dc) || dc <= 0) return;
     // Automated Conditions 5e's forced failure (its DC of 999): nothing could reach it.
     if (dc === 999 && game.modules.get("automated-conditions-5e")?.active) return;
-    let total = Number(roll.total ?? 0);
-    let barbed = false;
     if (total >= dc) {
       const barbs = await offerSilveryBarbs(message, roll, actor, test.rollType)
         .catch(err => { console.error(`[${MODULE_ID}] silvery barbs:`, err); return null; });
@@ -55,7 +73,23 @@ export async function onD20TestRolled(rolls, data, test) {
         detail: `d20: ${getKeptD20Result(barbs.roll) ?? "?"}`
       });
       roll = barbs.roll; total = Number(roll.total ?? 0); barbed = true;
+      await might();
       if (total >= dc) { await finishCardHistory(message, "passed"); return; }
+    }
+
+    // 2024 Countercharm: a save failed against being Charmed or Frightened, rerolled with Advantage.
+    if (test.kind === "save") {
+      const against = message.getFlag?.(MODULE_ID, SAVE_AGAINST_FLAG);
+      const charm = against?.length ? await offerCountercharm(message, roll, actor, against, speakerTokenOf(message))
+        .catch(err => { console.error(`[${MODULE_ID}] countercharm:`, err); return null; }) : null;
+      if (charm) {
+        await recordCardStep(message, charm.roll, total, {
+          kind: "check", label: `Countercharm (${charm.by}): rerolled with Advantage`, total: Number(charm.roll.total ?? 0),
+          detail: `d20s: ${charm.faces.join(", ")}`
+        });
+        roll = charm.roll; total = Number(roll.total ?? 0); barbed = true;
+        if (total >= dc) { await finishCardHistory(message, "passed"); await refreshOriginSummary(message); return; }
+      }
     }
 
     // Bardic Inspiration, Lucky… — offered with the Luck Dice, and to creatures without them.
@@ -80,6 +114,13 @@ export async function onD20TestRolled(rolls, data, test) {
   } catch (err) {
     console.error(`[${MODULE_ID}] native ${test.rollType} error:`, err);
   }
+}
+
+/** The token that rolled a card (its speaker), if it's on a scene. */
+function speakerTokenOf(message) {
+  const speaker = message?.speaker;
+  if (!speaker?.token) return null;
+  return (game.scenes?.get?.(speaker.scene) ?? canvas?.scene)?.tokens?.get?.(speaker.token) ?? null;
 }
 
 /**

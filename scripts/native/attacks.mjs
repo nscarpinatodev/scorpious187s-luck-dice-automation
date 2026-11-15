@@ -9,6 +9,7 @@ import { offerReactions, reactionMultiplier } from "./reactions.mjs";
 import { applyWeaponMastery, CLEAVE_FLAG } from "./mastery.mjs";
 import { applyStunningStrike } from "./monk.mjs";
 import { applyStudiedAttacks } from "./fighter.mjs";
+import { potentCantripMiss } from "./wizard.mjs";
 import { autoRolledEnabled } from "./autoroll.mjs";
 import { applyRetaliation } from "./retaliation.mjs";
 import { rollExtras } from "./boosts.mjs";
@@ -319,13 +320,18 @@ export async function automateAttack(attackMessage, activity) {
   const mode = getAttackAutomation();
   if (mode === "off" || typeof activity.rollDamage !== "function" || !hasDamage(activity)) return;
 
-  const hits = (attackMessage.system?.evaluatedTargets ?? []).filter(t => !t.isMiss);
-  if (!hits.length) { debug("attack automation: no hit targets"); return; }
+  const evaluated = attackMessage.system?.evaluatedTargets ?? [];
+  const hits = evaluated.filter(t => !t.isMiss);
+  // 2024 Potent Cantrip (wizard.mjs): a cantrip that misses still deals half its damage.
+  const grazed = potentCantripMiss(activity) ? evaluated.filter(t => t.isMiss && Number.isFinite(t.ac)) : [];
+  if (!hits.length && !grazed.length) { debug("attack automation: no hit targets"); return; }
 
   if (mode === "prompt") {
     const choice = await promptChoice(
-      "Attack Hit",
-      `<p>Hit <strong>${escapeHTML(hits.map(t => t.name).join(", "))}</strong>. Roll damage?</p>`,
+      hits.length ? "Attack Hit" : "Potent Cantrip",
+      hits.length
+        ? `<p>Hit <strong>${escapeHTML(hits.map(t => t.name).join(", "))}</strong>. Roll damage?</p>`
+        : `<p>Missed <strong>${escapeHTML(grazed.map(t => t.name).join(", "))}</strong>. Roll damage for Potent Cantrip (half)?</p>`,
       [{ action: "roll", label: "Roll Damage" }, { action: "skip", label: "Not Now" }]
     );
     if (choice !== "roll") return;
@@ -335,9 +341,12 @@ export async function automateAttack(attackMessage, activity) {
   if (!damageMessage || mode !== "apply") return;
 
   await pendingLuckDamage.get(damageMessage.id);
-  // A reaction may halve a target's damage (Uncanny Dodge).
-  await requestApplyDamage(damageMessage, hits.map(hit => {
-    const multiplier = reactionMultiplier(attackMessage, hit.token);
-    return multiplier === undefined ? hit : { ...hit, multiplier };
-  }));
+  // A reaction may halve a target's damage (Uncanny Dodge); Potent Cantrip's misses take half.
+  await requestApplyDamage(damageMessage, [
+    ...hits.map(hit => {
+      const multiplier = reactionMultiplier(attackMessage, hit.token);
+      return multiplier === undefined ? hit : { ...hit, multiplier };
+    }),
+    ...grazed.map(miss => ({ ...miss, multiplier: 0.5, notes: ["Potent Cantrip"] }))
+  ]);
 }

@@ -22,6 +22,8 @@
 //   tool check that beats its DC —
 //     Silvery Barbs     — the roller's enemies within 60 ft who can see it: it
 //                         rerolls, keeping the lower (then its Luck Dice on a failure);
+//   on a failed save against being Charmed or Frightened (the roller's client, bard.mjs):
+//     Countercharm (2024) — the roller or a bard within 30 ft on its side: reroll with Advantage;
 //   when a spell is cast (the caster's client, counterspell.mjs):
 //     Counterspell      — its enemies within 60 ft who can see it;
 //   before damage is applied (the GM's client, as it applies the damage):
@@ -123,6 +125,11 @@ export const REACTIONS = {
   "superior-hunters-defense": {
     when: "damage", label: (_actor, { defenseType }) => `Superior Hunter's Defense (resistance to ${defenseType} damage until the end of the turn)`,
     useful: ({ defenseType, item }) => !!defenseType && rulesOf(item) !== "2014"   // 2014's is a choice of other features
+  },
+  // 2024 Countercharm (bard.mjs asks for it): a failed save against being Charmed or Frightened, rerolled with Advantage.
+  "countercharm": {
+    when: "failedSave", label: () => "Countercharm (reroll the save with Advantage)",
+    useful: ({ item }) => rulesOf(item) !== "2014"
   },
   "hellish-rebuke": { when: "afterDamage", label: (_actor, { attackerName }) => `Hellish Rebuke at ${attackerName}`, useful: ({ attacker }) => !!attacker },
   // Invocations: used here (no dnd5e activity needed), spending the invocation's uses where it has them.
@@ -287,6 +294,8 @@ export async function answerReaction(payload) {
        ${itemName ? `with ${escapeHTML(itemName)} ` : ""}(${total}${finite(ac) ? ` vs AC ${ac}` : ""})`
     : when === "success"
       ? `<strong>${escapeHTML(targetName ?? "A creature")}</strong> succeeded on a ${escapeHTML(rollType ?? "roll")} (${total}${finite(ac) ? ` vs DC ${ac}` : ""})`
+    : when === "failedSave"
+      ? `<strong>${escapeHTML(targetName ?? "A creature")}</strong> failed a ${escapeHTML(rollType ?? "saving throw")} (${total}${finite(ac) ? ` vs DC ${ac}` : ""})`
     : when === "damage"
       ? `<strong>${escapeHTML(name)}</strong> is about to take ${escapeHTML(types.join(", ") || "")} damage from ${escapeHTML(attackerName ?? "an attack")}`
       : `<strong>${escapeHTML(attackerName ?? "A creature")}</strong> damaged <strong>${escapeHTML(name)}</strong>`;

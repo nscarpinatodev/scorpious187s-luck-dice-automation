@@ -677,7 +677,9 @@ Hooks.once("init", () => {
           "And the fighting styles: Two-Weapon Fighting (the ability modifier on off-hand damage) and Great Weapon Fighting " +
           "(two-handed melee damage dice: 1s and 2s count as 3s; 2014: rerolled once). " +
           "And Studied Attacks (Fighter 13: after a miss, advantage on the next attack against that creature) and Elusive " +
-          "(Rogue 18: no attack against it has advantage, from any source, unless it's Incapacitated). " +
+          "(Rogue 18: no attack against it has advantage, from any source, unless it's Incapacitated); Grappler (advantage " +
+          "against a creature you're grappling); 2024 Potent Cantrip (a cantrip that misses deals half its damage, when the " +
+          "attack automation rolls it). " +
           "Shown in the roll window and on the card. With Automated Conditions 5e active, the checks it performs are " +
           "left to it, except where its feats differ from the rules (Gunner, 2024 Crossbow Expert).",
     scope: "world",
@@ -694,7 +696,9 @@ Hooks.once("init", () => {
           "Sense and Gnomish Cunning. Aura of Protection adds the paladin's Charisma modifier to the saves of allies in its " +
           "aura. Evasion: no damage on a successful Dexterity save, half on a failure (with Save Automation on Full). Sculpt " +
           "Spells: an evoker's Evocation spell with allies in it asks which creatures (up to 1 + the spell's level) succeed " +
-          "on the save and take no damage where a success means half (with Save Automation on). Shown " +
+          "on the save and take no damage where a success means half (with Save Automation on). Potent Cantrip: a cantrip's " +
+          "successful save takes half its damage. 2014 Countercharm: while a bard performs, it and friends within 30 ft have " +
+          "advantage on saves against being charmed or frightened. Staggered (Brutal Strike): disadvantage on the next save. Shown " +
           "in the roll window and on the card. With Automated Conditions 5e automating statuses, automatic failures are " +
           "left to it.",
     scope: "world",
@@ -709,7 +713,9 @@ Hooks.once("init", () => {
           "Dice): a Bardic Inspiration die (the bard's target is marked when they use it), 2014 Guidance on ability checks " +
           "and 2014 Resistance on saves (used up, ending the spell), the Lucky feat (roll another d20 and use the higher — " +
           "and when an attack hits you, the attacker rolls another and uses the lower) and Indomitable (reroll a failed save; " +
-          "2024 adds your Fighter level). 2024 Guidance adds its d4 through dnd5e already.",
+          "2024 adds your Fighter level), Dark One's Own Luck (+1d10 to a check or save, from its uses). 2024 Guidance adds " +
+          "its d4 through dnd5e already. Also Indomitable Might, applied on " +
+          "its own: a Strength check (2024: or save) below your Strength score uses the score.",
     scope: "world",
     config: true,
     type: Boolean,
@@ -939,7 +945,8 @@ Hooks.once("init", () => {
           "the end of the turn); after damage: Hellish Rebuke; on a successful save or ability check: enemies' Silvery Barbs " +
           "(a reroll keeping the lower; on an attack hit too; its caster then gives a creature Advantage on its next attack, " +
           "check or save within a minute); when a spell is cast: enemies' Counterspell (2024: the caster's Constitution save, " +
-          "no slot spent if it fails; 2014: automatic up to its slot level, else an ability check). Asked of the " +
+          "no slot spent if it fails; 2014: automatic up to its slot level, else an ability check); on a save failed against " +
+          "being charmed or frightened: 2024 Countercharm from the roller or a bard within 30 ft (rerolled with advantage). Asked of the " +
           "creature's player (or the GM); each is used through dnd5e. One reaction per creature until its next turn " +
           "(shared with opportunity attacks), shown in combat by a Reaction Used status you can toggle on the token HUD.",
     scope: "world",
@@ -1054,8 +1061,10 @@ const SETTINGS_LAYOUT = [
   { title: "Class Features", keys: ["invocations", "metamagic"],
     hint: "Other class features and feats go with the rule they use: Sneak Attack, Divine Smite, Divine and Primal Strike, " +
           "Colossus Slayer, Savage Attacker and Stunning Strike under On-Hit Riders; the fighting styles, attack feats, Studied " +
-          "Attacks and Elusive under Attack Rules; Parry, Uncanny Dodge, Deflect Attacks and Superior Hunter's Defense under Reaction " +
-          "Prompts; Evasion, Aura of Protection and Sculpt Spells under Saving Throw Rules; Relentless Rage under Death Saves." },
+          "Attacks, Elusive, Grappler and Potent Cantrip's misses under Attack Rules; Parry, Uncanny Dodge, Deflect Attacks, Superior " +
+          "Hunter's Defense and 2024 Countercharm under Reaction Prompts; Evasion, Aura of Protection, Sculpt Spells, Potent Cantrip, " +
+          "2014 Countercharm and Staggered under Saving Throw Rules; Indomitable Might and Dark One's Own Luck with the roll " +
+          "bonuses; Relentless Rage under Death Saves." },
   { title: "Other", major: true, keys: ["debug"] }
 ];
 

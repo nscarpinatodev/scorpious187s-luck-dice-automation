@@ -1,5 +1,11 @@
 // ── Scorpious187's Luck Dice Automation — Native dnd5e 6 ──────────────────────
-// Sculpt Spells (Wizard, School of Evocation; 2014 and 2024), under the "saveRules" setting.
+// Sculpt Spells and Potent Cantrip (Wizard, School of Evocation; 2014 and 2024).
+//
+// Potent Cantrip: a damaging cantrip's target that succeeds on its save takes half its damage, and no
+// other effect (saves.mjs, the "saveRules" setting); 2024 also when the cantrip's attack misses (attacks.mjs,
+// the "attackAdvantage" setting, when the attack automation rolls the damage).
+//
+// Sculpt Spells, under the "saveRules" setting.
 //
 // When the save automation rolls the saves for an Evocation spell cast by a wizard with
 // Sculpt Spells, and an ally of the caster is among the creatures saving, the caster
@@ -11,11 +17,30 @@
 
 import { hasLineOfSight } from "./advantage.mjs";
 import { pickCreatures } from "./targeting.mjs";
-import { MODULE_ID, debug, isSaveRulesEnabled, resolveTarget } from "./shared.mjs";
+import { rulesOf } from "./advantage.mjs";
+import { MODULE_ID, debug, isSaveRulesEnabled, isAttackAdvantageEnabled, resolveTarget } from "./shared.mjs";
 
 export const SCULPT_FLAG = "sculptSpells"; // on the spell's card: { text }
 
 const feature = (actor, identifier) => actor?.items?.find?.(i => i.system?.identifier === identifier) ?? null;
+
+/** The caster's Potent Cantrip, when this activity is one of its cantrips (a spell of level 0). */
+function potentCantripOf(activity) {
+  const item = activity?.item;
+  if (item?.type !== "spell" || (Number(item.system?.level) || 0) !== 0) return null;
+  return feature(activity?.actor, "potent-cantrip");
+}
+
+/** Potent Cantrip on a cantrip's save: a success takes half the damage (with the "saveRules" setting). */
+export function potentCantripSave(activity) {
+  return isSaveRulesEnabled() && !!potentCantripOf(activity);
+}
+
+/** 2024 Potent Cantrip on a cantrip's attack: a miss takes half the damage (with the "attackAdvantage" setting). */
+export function potentCantripMiss(activity) {
+  const item = potentCantripOf(activity);
+  return isAttackAdvantageEnabled() && !!item && rulesOf(item) !== "2014";
+}
 
 /** The level a spell was cast at: its own, plus the upcast dnd5e records on the card. */
 export function castLevelOf(item, usage) {
