@@ -40,7 +40,7 @@ Your GM chooses which of these are on. The setting each one belongs to is in bra
 | **Mirror Image** | When the target is under Mirror Image, a duplicate may take the attack instead (2024: a d6 per duplicate on a hit, any 3 or more; 2014: a d20 for every attack). The card says what happened. Blindsight and truesight see through it. |
 | **Sanctuary** | Attacking a creature warded by Sanctuary, or aiming a damaging spell at it, you make a Wisdom save first. On a failure you lose that target; with none left, the attack or spell is lost. |
 | **Sunlight Sensitivity** | On a scene your GM has marked as in sunlight, a creature with Sunlight Sensitivity has disadvantage on its attack rolls and ability checks (2014: Perception checks). |
-| **One-time marks** | Vex, Sap, Studied Attacks (after a Fighter misses a creature), Stunning Strike's advantage and Silvery Barbs' advantage (which also works on your next check or save). These apply to the next attack only and are used up by it. |
+| **One-time marks** | Vex, Sap, Studied Attacks (after a Fighter misses a creature), Stunning Strike's advantage, Silvery Barbs' advantage (which also works on your next check or save) and Sundering Blow's +5 (for anyone but the barbarian). These apply to the next attack only and are used up by it. |
 | **Elusive** | A Rogue with Elusive can't be attacked with advantage from any source, unless they're Incapacitated. The card lists the advantage that was ignored. |
 | **Cover** | Spell Sniper and Sharpshooter ignore half and three-quarters cover. The card shows the target's AC without the cover bonus. |
 
@@ -60,6 +60,7 @@ Advantage and disadvantage from any sources cancel out, as the rules say. Checks
 | **Aura of Protection** | The best Charisma modifier (at least +1) among friendly paladins within 10 ft, or 30 ft from 18th level. Two paladins don't stack; you get the higher one. A paladin who's incapacitated gives nothing. |
 | **Automatic failure** | Strength and Dexterity saves while you're Paralyzed, Stunned, Unconscious or Petrified. The roll is still shown, and Legendary Resistance can still turn it. |
 | **Advantage from traits** | Magic Resistance, Gnome Cunning, Duergar Resilience, Dwarven Resilience, Fey Ancestry, Brave, and 2014 Danger Sense, each against what it covers. Saves made to end a condition count too. |
+| **Aura of Courage** | Allies in a paladin's Aura of Courage can't be frightened: a Frightened effect doesn't land on them, and if they're already frightened they attack normally. |
 | **Countercharm (2014)** | While a bard performs it, the bard and friends within 30 ft who can hear it have advantage on saves against being charmed or frightened. |
 | **Staggered** | A Barbarian's Brutal Strike (Staggering Blow) gives you disadvantage on your next save. |
 
@@ -80,8 +81,10 @@ Advantage and disadvantage from any sources cancel out, as the rules say. Checks
 | **Invocations** | Agonizing Blast adds your Charisma modifier to each beam. Improved Pact Weapon adds +1. *(Eldritch Invocations)* |
 | **Transmuted Spell** | The damage type you picked replaces the spell's. *(Metamagic)* |
 | **Marks** | Hunter's Mark and Hex are added automatically when every creature you hit carries your mark. *(On-Hit Riders)* |
+| **Empowered Evocation** | An Evoker adds their Intelligence modifier to the first damage roll of each wizard Evocation spell. *(Attack Rules)* |
+| **Toll the Dead** | Rolls d12s instead of d8s when its target is already hurt, whichever version you picked. *(Attack Rules)* |
 | **Potent Cantrip (2024)** | An Evoker's damaging cantrip that misses still deals half its damage, with no other effect. *(Attack Rules)* |
-| **Choices on a hit** | Sneak Attack, Divine Smite, the 2024 smites (Searing, Thunderous, Wrathful and Shining Smite), Divine Strike, Primal Strike and Colossus Slayer are offered as checkboxes when the hit's damage is rolled, where they apply. A smite's save and effect follow it. Savage Attacker rolls your weapon dice twice and keeps the better total. *(On-Hit Riders)* |
+| **Choices on a hit** | Sneak Attack, Divine Smite, the 2024 smites (Searing, Thunderous, Wrathful and Shining Smite), Divine Strike, Primal Strike and Colossus Slayer are offered as checkboxes when the hit's damage is rolled, where they apply. A smite's save and effect follow it. Savage Attacker rolls your weapon dice twice and keeps the better total. Great Weapon Master (2024) adds your proficiency bonus to a Heavy weapon hit on your turn. *(On-Hit Riders)* |
 
 ## What's offered after a roll
 
@@ -89,7 +92,7 @@ These don't change the roll ahead of time. They show up as a prompt or a card no
 
 | | |
 | --- | --- |
-| **A failed roll or a miss** | One prompt offers your Luck Dice, plus Bardic Inspiration, Guidance and Resistance (2014), Lucky, Indomitable, Protection of the Talisman, Dark One's Own Luck and Seeking Spell, whichever you have. |
+| **A failed roll or a miss** | One prompt offers your Luck Dice, plus Bardic Inspiration, Guidance and Resistance (2014), Lucky, Indomitable, Protection of the Talisman, Dark One's Own Luck, Tactical Mind (a Second Wind use, spent only if it works), Stroke of Luck (your d20 becomes a 20) and Seeking Spell, whichever you have. |
 | **A low Strength check** | Indomitable Might (Barbarian 18) uses your Strength score in place of a lower total, on Strength checks (and, with the 2024 rules, Strength saves). |
 | **When you fail a save against charm or fear** | With the 2024 rules, you or a bard within 30 ft can use Countercharm to reroll the save with advantage. Your Luck Dice prompt follows if it still fails. |
 | **After you hit** | Weapon Mastery effects (Topple, Sap, Vex, Slow, Push, Cleave) and Stunning Strike. Graze applies on a miss. |
@@ -97,7 +100,7 @@ These don't change the roll ahead of time. They show up as a prompt or a card no
 | **When you succeed on a save or check** | An enemy within 60 ft who can see you may cast Silvery Barbs: you reroll and keep the lower. If that turns it into a failure, your Luck Dice prompt follows as usual. Whoever cast it then picks a creature to have advantage on its next attack, check or save within a minute. |
 | **When you cast a spell** | An enemy within 60 ft who can see you may cast Counterspell. With the 2024 spell you make a Constitution save, and on a failure the spell fizzles without spending its slot. With the 2014 spell it's countered outright up to the Counterspell's level, otherwise the counterspeller makes a spellcasting ability check; a countered spell's slot is still spent. Spells cast with Subtle Spell can't be countered. |
 | **When saves are settled** | Evasion, Careful Spell, Heightened Spell, Sculpt Spells and Potent Cantrip change the outcome or the damage. A cantrip from an Evoker with Potent Cantrip still deals half damage on a successful save. An evoker's spell with allies caught in it asks the wizard which creatures to shape it around. |
-| **When damage lands** | Death-save failures from damage at 0 HP, massive damage, Relentless Rage, and Gift of the Protectors. |
+| **When damage lands** | Death-save failures from damage at 0 HP, massive damage, Relentless Rage, and Gift of the Protectors. An Abjurer's Arcane Ward takes damage before they do; casting an Abjuration spell with a slot creates the ward or restores twice the spell's level. |
 
 ## What happens on the board
 

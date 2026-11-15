@@ -682,7 +682,10 @@ Hooks.once("init", () => {
           "attack automation rolls it); Pack Tactics (an ally within 5 ft of the target); Blur (disadvantage against the " +
           "blurred creature, unless the attacker has blindsight or truesight); Shining Smite (advantage against it); Mirror " +
           "Image (a duplicate may take a hit instead: 2024 a d6 per duplicate, 2014 a d20); Sunlight Sensitivity (on a scene " +
-          "marked In Sunlight in its configuration: disadvantage on attacks and checks — 2014: Perception). " +
+          "marked In Sunlight in its configuration: disadvantage on attacks and checks — 2014: Perception). Also Empowered " +
+          "Evocation (+Intelligence to an evoker's Evocation spell's first damage roll), Toll the Dead (d12s against a creature " +
+          "missing Hit Points) and Brutal Strike's options (their effect on the target; Forceful Blow pushes 15 ft; Sundering " +
+          "Blow's +5 on the next attack roll by someone else). " +
           "Shown in the roll window and on the card. With Automated Conditions 5e active, the checks it performs are " +
           "left to it, except where its feats differ from the rules (Gunner, 2024 Crossbow Expert).",
     scope: "world",
@@ -703,7 +706,8 @@ Hooks.once("init", () => {
           "successful save takes half its damage. 2014 Countercharm: while a bard performs, it and friends within 30 ft have " +
           "advantage on saves against being charmed or frightened. Staggered (Brutal Strike): disadvantage on the next save. " +
           "Sanctuary: an attack roll or damaging spell at the warded creature waits for the attacker's Wisdom save; a failure " +
-          "loses that target (the ward ends when the warded creature attacks, casts or deals damage). Shown " +
+          "loses that target (the ward ends when the warded creature attacks, casts or deals damage). Aura of Courage: no " +
+          "Frightened effect lands on the paladin or its allies in the aura, and frightened attackers there roll normally. Shown " +
           "in the roll window and on the card. With Automated Conditions 5e automating statuses, automatic failures are " +
           "left to it.",
     scope: "world",
@@ -718,7 +722,8 @@ Hooks.once("init", () => {
           "Dice): a Bardic Inspiration die (the bard's target is marked when they use it), 2014 Guidance on ability checks " +
           "and 2014 Resistance on saves (used up, ending the spell), the Lucky feat (roll another d20 and use the higher — " +
           "and when an attack hits you, the attacker rolls another and uses the lower) and Indomitable (reroll a failed save; " +
-          "2024 adds your Fighter level), Dark One's Own Luck (+1d10 to a check or save, from its uses). 2024 Guidance adds " +
+          "2024 adds your Fighter level), Dark One's Own Luck (+1d10 to a check or save, from its uses), Tactical Mind (+1d10 " +
+          "to a failed check, a Second Wind use spent only if it succeeds) and Stroke of Luck (the d20 becomes a 20). 2024 Guidance adds " +
           "its d4 through dnd5e already. Also Indomitable Might, applied on " +
           "its own: a Strength check (2024: or save) below your Strength score uses the score.",
     scope: "world",
@@ -808,7 +813,9 @@ Hooks.once("init", () => {
     "death save around are recorded properly. Relentless Rage: a raging barbarian dropped to 0 HP makes its Constitution " +
     "save (DC 10, +5 per use until a rest) and on a success is back at twice its Barbarian level in HP (2014: 1). " +
     "Monsters: Undead Fortitude (a Constitution save, DC 5 + the damage, to stay at 1 HP — not against radiant damage or a " +
-    "critical hit) and Regeneration (its healing at the start of its turn, unless it took the damage its description names).");
+    "critical hit) and Regeneration (its healing at the start of its turn, unless it took the damage its description names). " +
+    "Arcane Ward: once created (or by the first Abjuration spell cast with a slot), damage goes to the ward first; Abjuration " +
+    "spells cast with a slot restore twice their level.");
   nativeToggle("clearInstantAreas", "Clear Spell Areas",
     "Remove an instantaneous spell's placed area once the automation has resolved it (left to Flash Rolls 5e when its Remove " +
     "Template option is on), and a concentration spell's area when its concentration ends. Lingering and wall spells' areas " +
@@ -913,6 +920,7 @@ Hooks.once("init", () => {
           "(melee hit), Divine Strike and Primal Strike (weapon hit, once per turn, their damage type chosen) and Colossus " +
           "Slayer (a target missing Hit Points, once per turn) as a choice. Their dice double on a critical hit and apply " +
           "with the hit. Savage Attacker: once per turn, a weapon hit's damage dice are rolled twice and the higher used. " +
+          "Great Weapon Master (2024): your Proficiency Bonus added to a Heavy weapon hit on your turn. " +
           "The 2024 smites (Searing, Thunderous, Wrathful, Shining) on a melee hit, like Divine Smite — then their effect and " +
           "save (Thunderous: pushed 10 ft and Prone; Searing burns at the start of the target's turns). " +
           "Stunning Strike: after a Monk weapon or Unarmed Strike hit, offer to spend a Focus Point; the save is rolled by " +
@@ -1068,12 +1076,13 @@ const SETTINGS_LAYOUT = [
   { title: "Targets, Areas & Walls", keys: ["targetConfirmation", "lingeringAreas", "clearInstantAreas", "wallSpells"] },
   { title: "Chat & Turns", keys: ["privateRollOutcome", "turnSummary"] },
   { title: "Class Features", keys: ["invocations", "metamagic"],
-    hint: "Other class features and feats go with the rule they use: Sneak Attack, Divine Smite, Divine and Primal Strike, " +
-          "Colossus Slayer, Savage Attacker and Stunning Strike under On-Hit Riders; the fighting styles, attack feats, Studied " +
-          "Attacks, Elusive, Grappler and Potent Cantrip's misses under Attack Rules; Parry, Uncanny Dodge, Deflect Attacks, Superior " +
-          "Hunter's Defense and 2024 Countercharm under Reaction Prompts; Evasion, Aura of Protection, Sculpt Spells, Potent Cantrip, " +
-          "2014 Countercharm and Staggered under Saving Throw Rules; Indomitable Might and Dark One's Own Luck with the roll " +
-          "bonuses; Relentless Rage under Death Saves." },
+    hint: "Other class features and feats go with the rule they use: Sneak Attack, Divine Smite and the smites, Divine and " +
+          "Primal Strike, Colossus Slayer, Great Weapon Master, Savage Attacker and Stunning Strike under On-Hit Riders; the fighting " +
+          "styles, attack feats, Studied Attacks, Elusive, Grappler, Brutal Strike's options, Empowered Evocation and Potent " +
+          "Cantrip's misses under Attack Rules; Parry, Uncanny Dodge, Deflect Attacks, Superior Hunter's Defense and 2024 " +
+          "Countercharm under Reaction Prompts; Evasion, Aura of Protection, Aura of Courage, Sculpt Spells, Potent Cantrip, 2014 " +
+          "Countercharm and Staggered under Saving Throw Rules; Indomitable Might, Dark One's Own Luck, Tactical Mind and Stroke " +
+          "of Luck with the roll bonuses; Relentless Rage and Arcane Ward under Death Saves." },
   { title: "Other", major: true, keys: ["debug"] }
 ];
 

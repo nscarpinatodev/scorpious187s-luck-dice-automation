@@ -73,6 +73,13 @@ export const RIDERS = {
     activities: (item) => rulesOf(item) === "2014" ? [] : damageActivities(item).slice(0, 1),
     after: smiteAfter
   }])),
+  // Great Weapon Master (2024): a hit with a Heavy weapon as part of the Attack action on your turn deals extra
+  // damage equal to your Proficiency Bonus (its damage activity), the weapon's damage type. Added automatically.
+  "great-weapon-master": {
+    mode: "auto", checked: true,
+    eligible: ({ activity }) => isWeaponAttack(activity) && !!activity.item?.system?.properties?.has?.("hvy") && onOwnTurn(activity.actor),
+    activities: (item) => rulesOf(item) === "2014" ? [] : damageActivities(item).slice(0, 1), damageType: "weapon"
+  },
   "eldritch-smite": {
     mode: "choose", checked: false, oncePerTurn: true, setting: isInvocationsEnabled,
     eligible: ({ activity }) => isPactWeapon(activity),
@@ -108,6 +115,13 @@ export const RIDERS = {
     activities: (item) => damageActivities(item).filter(a => /colossus/i.test(a.name ?? "")).slice(0, 1), damageType: "weapon"
   }
 };
+
+/** Whether it's this creature's turn in combat (or there's no combat). */
+function onOwnTurn(actor) {
+  const combat = game.combat;
+  if (!combat?.started) return true;
+  return combat.combatant?.actor === actor || (!!actor?.uuid && combat.combatant?.actor?.uuid === actor.uuid);
+}
 
 /** Divine / Primal Strike: the improved activity from this class level, else the base one. */
 function improvedStrike(classId, level) {

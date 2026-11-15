@@ -37,9 +37,10 @@ export async function smiteAfter(choice, { activity, hits }) {
   const usage = choice.usage ?? null;
   const targets = hits.map(h => ({ actor: h.actor, token: h.token, name: h.name }));
   if (!targets.length) return notes;
-  // The damage activity's own effect (Seared, Shining), applied as dnd5e's effects tray would.
-  if (usage && (await usage.system?.getEffects?.())?.length) {
-    await requestApplyEffects(usage, targets);
+  // The damage activity's own effect (Seared, Shining), applied as dnd5e's effects tray would (each target, every effect).
+  const effectIds = usage ? ((await usage.system?.getEffects?.()) ?? []).map(e => e.id) : [];
+  if (usage && effectIds.length) {
+    await requestApplyEffects(usage, targets.map(t => ({ ...t, effectIds })));
     notes.push(`${choice.item.name.replace(/ Smite$/, "")} on ${targets.map(t => t.name).join(", ")}`);
   }
   const save = hitSave(choice.item);

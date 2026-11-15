@@ -181,6 +181,31 @@ export function boostsFor(actor, kind, { spell: spellAttack = false } = {}) {
       return { bonusRoll, label: "Added 1d10 Dark One's Own Luck", detail: `+${bonusRoll.total}` };
     }
   });
+  // Tactical Mind (2024 Fighter 2): +1d10 to a failed ability check from a Second Wind use — spent only if it
+  // turns the check into a success.
+  const tactical = kind === "check" && [...(actor?.items ?? [])].some(i => i.system?.identifier === "tactical-mind")
+    ? itemWithUses(actor, "second-wind") : null;
+  if (tactical) boosts.push({
+    id: "tactical-mind", label: `Tactical Mind (+1d10, a Second Wind use if it succeeds; ${usesLeft(tactical)} left)`,
+    async use(roll) {
+      const bonusRoll = await rollOne("1d10");
+      const dc = Number(roll?.options?.target);
+      const succeeds = Number.isFinite(dc) && Number(roll?.total ?? 0) + bonusRoll.total >= dc;
+      if (succeeds) await spendUse(tactical);
+      return { bonusRoll, label: "Added 1d10 Tactical Mind", detail: `+${bonusRoll.total}${succeeds ? " (a Second Wind use spent)" : " (still failed: no use spent)"}` };
+    }
+  });
+  // Stroke of Luck (Rogue 20): the d20 becomes a 20 — 2024 any D20 Test; 2014 a missed attack or a failed check.
+  const stroke = itemWithUses(actor, "stroke-of-luck");
+  if (stroke && (rulesOf(stroke) !== "2014" || kind !== "save")) boosts.push({
+    id: "stroke-of-luck", replaces: true, label: `Stroke of Luck: the d20 becomes a 20 (${usesLeft(stroke)} left)`,
+    async use(roll) {
+      const twenty = withExtraD20(roll, 20, "higher");
+      if (!twenty) return null;
+      await spendUse(stroke);
+      return { roll: twenty, label: "Stroke of Luck: a 20", detail: "d20: 20" };
+    }
+  });
   const indomitable = kind === "save" ? itemWithUses(actor, "indomitable") : null;
   if (indomitable) {
     const bonus = rulesOf(indomitable) === "2024" ? Number(actor.classes?.fighter?.system?.levels ?? 0) || 0 : 0;

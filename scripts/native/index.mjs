@@ -44,6 +44,7 @@ import { onRenderSceneConfig } from "./sunlight.mjs";
 import { onCountercharmUsed } from "./bard.mjs";
 import { onTurnStartSearing } from "./smites.mjs";
 import { onPreApplyDamageMonsters, onDamageAppliedMonsters, onTurnStartRegeneration } from "./monsters.mjs";
+import { onPreRollDamageFeatures, onFeatureUsed, onPreApplyDamageWard } from "./features.mjs";
 import { rollExtras, markBoostTargets, markBardicGM, consumeBoostGM, endBoostSpellGM } from "./boosts.mjs";
 import { onPreRollAttackInvocations, onPreRollDamageInvocations, onDamageAppliedGift, onTurnStartCloak, onMaddeningHexUsed } from "./invocations.mjs";
 import { onPreUseMetamagic, onRenderUsageDialog, onMetamagicUsed, onPreRollDamageMetamagic, onPreRollConcentrationMetamagic } from "./metamagic.mjs";
@@ -167,6 +168,7 @@ Hooks.once("ready", () => {
   Hooks.on("dnd5e.preRollDamageV2", onPreRollDamage); // automatic critical hits; never cancels
   Hooks.on("dnd5e.preRollDamageV2", onPreRollDamageFeats); // 2024 Crossbow Expert's off-hand damage; never cancels
   Hooks.on("dnd5e.preRollDamageV2", onPreRollDamageCleave); // a Cleave attack's damage: no ability modifier; never cancels
+  Hooks.on("dnd5e.preRollDamageV2", onPreRollDamageFeatures); // Empowered Evocation, Toll the Dead; never cancels
   Hooks.on("dnd5e.preRollDamageV2", onPreRollDamageRedirect); // Deflect Attacks' redirect: the attack's damage type; never cancels
   Hooks.on("dnd5e.preRollDamageV2", skipAutoRolledDamageDialog); // never cancels
   Hooks.on("dnd5e.rollAttackV2", (rolls) =>
@@ -200,6 +202,7 @@ Hooks.once("ready", () => {
   });
   Hooks.on("updateActor", (actor, changes) =>
     onActorUpdatedAgathys(actor, changes).catch(err => console.error(`[${MODULE_ID}] armor of agathys:`, err)));
+  Hooks.on("dnd5e.preApplyDamage", onPreApplyDamageWard); // Arcane Ward first: what's left of the damage is what the rest see
   Hooks.on("dnd5e.preApplyDamage", onPreApplyDamage); // synchronous; never cancels
   Hooks.on("dnd5e.preApplyDamage", onPreApplyDamageRelentless); // after the death saves' (massive damage); never cancels
   Hooks.on("dnd5e.preApplyDamage", onPreApplyDamageMonsters);   // Undead Fortitude, Regeneration's blocking damage; never cancels
@@ -259,6 +262,7 @@ Hooks.once("ready", () => {
     recordWallSpell(activity, usageConfig, results).catch(err => console.error(`[${MODULE_ID}] wall spells:`, err));
     onDisengageUsed(activity).catch(err => console.error(`[${MODULE_ID}] disengage:`, err));
     onCountercharmUsed(activity).catch(err => console.error(`[${MODULE_ID}] countercharm:`, err)); // 2014: the performance
+    onFeatureUsed(activity, usageConfig, results).catch(err => console.error(`[${MODULE_ID}] class features:`, err)); // Empowered Evocation, Brutal Strike, Arcane Ward
     recordAgathys(activity, usageConfig).catch(err => console.error(`[${MODULE_ID}] armor of agathys:`, err));
     markBoostTargets(activity, results).catch(err => console.error(`[${MODULE_ID}] roll boosts:`, err));
     const followUp = usageConfig?.subsequentActions !== false;

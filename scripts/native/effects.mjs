@@ -4,7 +4,8 @@
 import { isPrivateGMCard, playerTargets, recordOutcome, outcomeTitle } from "./outcome.mjs";
 import { doubledDuration, METAMAGIC_FLAG } from "./metamagic.mjs";
 import { rulesOf } from "./advantage.mjs";
-import { MODULE_ID, getPrivateRollOutcome, isEffectAutomationEnabled, socket, getPrimaryGM, resolveTarget, APPLIED_EFFECTS_FLAG, antimagicStops } from "./shared.mjs";
+import { auraOfCourage } from "./features.mjs";
+import { MODULE_ID, getPrivateRollOutcome, isEffectAutomationEnabled, isSaveRulesEnabled, socket, getPrimaryGM, resolveTarget, APPLIED_EFFECTS_FLAG, antimagicStops } from "./shared.mjs";
 
 // ── Effect automation ─────────────────────────────────────────────────────────
 // The "effectAutomation" setting: an activity's effects (the ones listed on its
@@ -77,6 +78,12 @@ export async function applyActivityEffects({ usageId, targets }) {
       const statuses = [...(effect.statuses ?? [])];
       if (statuses.length && statuses.every(s => immunities?.has?.(s))) {
         names.push(`${effect.name} (immune)`);
+        continue;
+      }
+      // Aura of Courage (features.mjs): no Frightened for the paladin and its allies in the aura.
+      if (statuses.length && statuses.every(s => s === "frightened") && isSaveRulesEnabled()
+        && auraOfCourage(actor, (await resolveTarget(target)).tokenDoc)) {
+        names.push(`${effect.name} (Aura of Courage)`);
         continue;
       }
       try {

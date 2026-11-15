@@ -32,9 +32,10 @@
 // with exactly one target (dnd5e rolls once for all of them). The reasons are
 // shown in dnd5e's roll window and on the attack card.
 
-import { MODULE_ID, debug, escapeHTML, isAttackAdvantageEnabled, isAutoCritsEnabled, isWeaponMasteryEnabled, socket, isLike } from "./shared.mjs";
+import { MODULE_ID, debug, escapeHTML, isAttackAdvantageEnabled, isAutoCritsEnabled, isWeaponMasteryEnabled, isSaveRulesEnabled, socket, isLike } from "./shared.mjs";
 import { MASTERY_FLAG } from "./mastery.mjs";
 import { inSunlight, sunlightSensitivity } from "./sunlight.mjs";
+import { sunderedFor, auraOfCourage } from "./features.mjs";
 
 export const ATTACK_REASONS_FLAG = "attackReasons";
 export const SAVE_REASONS_FLAG = "saveReasons"; // save-rules.mjs
@@ -394,7 +395,8 @@ export function attackReasons(activity, config = {}) {
     if (has(fx.actor, "blinded")) disadvantage.push("Blinded");
     if (has(fx.actor, "invisible")) advantage.push("Invisible");
     const fear = frightenedBySeenSource(fx);
-    if (fear) disadvantage.push(`Frightened of ${fear.name}`);
+    // Aura of Courage (features.mjs, with Saving Throw Rules): Frightened has no effect in the aura.
+    if (fear && !(isSaveRulesEnabled() && auraOfCourage(fx.actor, fx.attacker))) disadvantage.push(`Frightened of ${fear.name}`);
     if (targetActor) {
       if (has(targetActor, "prone")) {
         if (fx.melee && distance <= adjacent()) advantage.push("Target prone");
@@ -445,7 +447,13 @@ export function attackReasons(activity, config = {}) {
     elusive = { name: target.name, blocked: advantage.splice(0) };
   }
 
-  return { advantage, disadvantage, cancel, consume, ignored, dropAc5e, coverIgnored, elusive };
+  // Sundering Blow (features.mjs): +5 to the next attack roll against the creature by anyone but the barbarian.
+  const bonuses = [];
+  let attackBonus = 0;
+  const sundered = targetActor ? sunderedFor(targetActor, fx.actor) : null;
+  if (sundered) { bonuses.push("Sundering Blow +5"); attackBonus += 5; consume.push(sundered.uuid); }
+
+  return { advantage, disadvantage, cancel, consume, ignored, dropAc5e, coverIgnored, elusive, bonuses, attackBonus };
 }
 
 /** Silvery Barbs' advantage mark on a creature (reactions.mjs), if it has one: its next attack, check or save. */
@@ -512,7 +520,11 @@ export function onPreRollAttack(config, dialog, message) {
     ui.notifications?.warn(`Luck Dice Automation: ${reasons.cancel}`);
     return false;
   }
-  if (!reasons.advantage.length && !reasons.disadvantage.length && !reasons.ignored?.length && !reasons.elusive) return;
+  if (!reasons.advantage.length && !reasons.disadvantage.length && !reasons.ignored?.length && !reasons.elusive && !reasons.attackBonus) return;
+  if (reasons.attackBonus) {
+    const first = config.rolls?.[0];
+    if (first) (first.parts ??= []).push(String(reasons.attackBonus));
+  }
 
   if (reasons.coverIgnored?.length) bypassCover(config, message, reasons.coverIgnored);
   if (reasons.dropAc5e?.includes("nearbyFoe")) dropAc5eNearbyFoe(config);
@@ -672,7 +684,8 @@ export function reasonsHTML(reasons) {
   const both = reasons?.advantage?.length && reasons?.disadvantage?.length;
   return [part("Advantage", reasons?.advantage), part("Disadvantage", reasons?.disadvantage)].filter(Boolean).join(" &nbsp; ")
     + (both ? ` <span style="opacity:0.75">(they cancel)</span>` : "")
-    + (reasons?.ignored?.length ? `${reasons.advantage?.length || reasons.disadvantage?.length ? " &nbsp; " : ""}${part("Ignored", reasons.ignored)}` : "");
+    + (reasons?.ignored?.length ? `${reasons.advantage?.length || reasons.disadvantage?.length ? " &nbsp; " : ""}${part("Ignored", reasons.ignored)}` : "")
+    + (Array.isArray(reasons?.bonuses) && typeof reasons.bonuses[0] === "string" ? ` &nbsp; ${part("Bonus", reasons.bonuses)}` : "");
 }
 
 /** renderAttackRollConfigurationDialog: show the reasons at the top of dnd5e's roll window. */
@@ -724,6 +737,7 @@ export async function consumeAttackMarkGM({ uuid }) {
   if (isStaggered(effect)) return effect.setFlag(MODULE_ID, STAGGER_USED, true);
   // A Mirror Image duplicate destroyed (illusions.mjs); a Sanctuary ward ended (sanctuary.mjs).
   if (["mirror-image", "sanctuary"].includes(sourceItem(effect)?.system?.identifier)) return effect.delete();
+  if (sourceItem(effect)?.system?.identifier === "brutal-strike" && /sunder/i.test(effect.name ?? "")) return effect.delete(); // used up
   const mastery = effect.getFlag?.(MODULE_ID, MASTERY_FLAG)?.kind;
   if (sourceItem(effect)?.system?.identifier === "guiding-bolt" || ["sap", "vex", "studied-attacks", "stunning-strike", "silvery-barbs"].includes(mastery)) await effect.delete();
 }
