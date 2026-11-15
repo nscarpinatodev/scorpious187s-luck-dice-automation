@@ -93,7 +93,7 @@ export async function onD20TestRolled(rolls, data, test) {
     }
 
     // Bardic Inspiration, Lucky… — offered with the Luck Dice, and to creatures without them.
-    const extras = rollExtras(actor, test.kind ?? "check");
+    const extras = rollExtras(actor, test.kind ?? "check", { ability: data?.ability ?? null });
     if (!canUseLuck(actor) && !extras) {
       if (barbed) { await finishCardHistory(message, "failed"); await refreshOriginSummary(message); }
       return;

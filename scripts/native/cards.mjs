@@ -2,6 +2,7 @@
 // What the module adds to dnd5e's chat cards: the Luck Dice history, Applied and Effects rows, Undo buttons.
 
 import { RIDERS_FLAG, SAVAGE_FLAG } from "./riders.mjs";
+import { FEATS_FLAG } from "./feats.mjs";
 import { STUNNING_FLAG } from "./monk.mjs";
 import { STUDIED_FLAG } from "./fighter.mjs";
 import { SCULPT_FLAG } from "./wizard.mjs";
@@ -99,6 +100,8 @@ export function injectNativeHistory(message, html) {
   const savage = message.getFlag?.(MODULE_ID, SAVAGE_FLAG);
   if (savage) blocks.push(renderNoteRow("fa-dice", "Savage Attacker",
     `weapon dice rolled twice: ${savage.first} / ${savage.second} — used the ${savage.kept === "second" ? "second" : "first"}`));
+  const feats = message.getFlag?.(MODULE_ID, FEATS_FLAG);
+  if (feats?.length) blocks.push(renderNoteRow("fa-hammer", "Feats", feats.join("; ")));
   const appliedEffects = message.getFlag?.(MODULE_ID, APPLIED_EFFECTS_FLAG);
   if (appliedEffects?.length) {
     const block = renderAppliedEffectsSection(appliedEffects);

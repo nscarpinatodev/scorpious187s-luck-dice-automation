@@ -137,7 +137,7 @@ async function endSpell(mark) {
  * What this creature could use on this roll (kind: "attack", "check" or "save"; `spell`: a spell's
  * attack), as prompt extras — each under its own setting.
  */
-export function boostsFor(actor, kind, { spell: spellAttack = false } = {}) {
+export function boostsFor(actor, kind, { spell: spellAttack = false, ability = null } = {}) {
   const boosts = [...invocationAndMetamagicBoosts(actor, kind, { spell: spellAttack })];
   if (!isRollBoostsEnabled()) return boosts;
   const bardic = bardicInspiration(actor);
@@ -204,6 +204,18 @@ export function boostsFor(actor, kind, { spell: spellAttack = false } = {}) {
       if (!twenty) return null;
       await spendUse(stroke);
       return { roll: twenty, label: "Stroke of Luck: a 20", detail: "d20: 20" };
+    }
+  });
+  // Mage Slayer's Guarded Mind (2024): a failed Intelligence, Wisdom or Charisma save succeeds instead (a use a short rest).
+  const guarded = kind === "save" && ["int", "wis", "cha"].includes(ability) ? itemWithUses(actor, "mage-slayer") : null;
+  if (guarded && rulesOf(guarded) !== "2014") boosts.push({
+    id: "guarded-mind", label: `Guarded Mind: succeed instead (${usesLeft(guarded)} left)`,
+    async use(roll) {
+      const dc = Number(roll?.options?.target), total = Number(roll?.total ?? 0);
+      if (!Number.isFinite(dc) || total >= dc) return null;
+      const bonusRoll = await new Roll(String(dc - total)).evaluate();
+      await spendUse(guarded);
+      return { bonusRoll, label: "Guarded Mind: succeeded instead", detail: `+${dc - total} (to the DC)` };
     }
   });
   const indomitable = kind === "save" ? itemWithUses(actor, "indomitable") : null;

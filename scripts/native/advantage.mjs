@@ -36,6 +36,7 @@ import { MODULE_ID, debug, escapeHTML, isAttackAdvantageEnabled, isAutoCritsEnab
 import { MASTERY_FLAG } from "./mastery.mjs";
 import { inSunlight, sunlightSensitivity } from "./sunlight.mjs";
 import { sunderedFor, auraOfCourage } from "./features.mjs";
+import { featMarkReasons } from "./feats.mjs";
 
 export const ATTACK_REASONS_FLAG = "attackReasons";
 export const SAVE_REASONS_FLAG = "saveReasons"; // save-rules.mjs
@@ -478,6 +479,9 @@ function addMasteryReasons(fx, { advantage, disadvantage, consume }) {
   if (barbs) { advantage.push("Silvery Barbs"); consume.push(barbs.uuid); }
   const exposed = fx.target ? [...(fx.target.actor?.effects ?? [])].find(e => masteryOf(e)?.kind === "stunning-strike") : null;
   if (exposed) { advantage.push("Stunning Strike"); consume.push(exposed.uuid); }
+  // Crusher's and Slasher's critical-hit marks, and Help against the target (feats.mjs).
+  const feats = featMarkReasons({ attackerActor: fx.actor, attackerDoc: fx.attacker, targetActor: fx.target?.actor });
+  advantage.push(...feats.advantage); disadvantage.push(...feats.disadvantage); consume.push(...feats.consume);
 }
 
 /** Only the Weapon Mastery reasons (when the advantage setting is off but Weapon Mastery is on). */
@@ -739,7 +743,7 @@ export async function consumeAttackMarkGM({ uuid }) {
   if (["mirror-image", "sanctuary"].includes(sourceItem(effect)?.system?.identifier)) return effect.delete();
   if (sourceItem(effect)?.system?.identifier === "brutal-strike" && /sunder/i.test(effect.name ?? "")) return effect.delete(); // used up
   const mastery = effect.getFlag?.(MODULE_ID, MASTERY_FLAG)?.kind;
-  if (sourceItem(effect)?.system?.identifier === "guiding-bolt" || ["sap", "vex", "studied-attacks", "stunning-strike", "silvery-barbs"].includes(mastery)) await effect.delete();
+  if (sourceItem(effect)?.system?.identifier === "guiding-bolt" || ["sap", "vex", "studied-attacks", "stunning-strike", "silvery-barbs", "mage-slayer", "help", "help-check"].includes(mastery)) await effect.delete();
 }
 
 /**

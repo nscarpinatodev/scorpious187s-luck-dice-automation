@@ -7,6 +7,7 @@ import { clearAreasForUse } from "./areas.mjs";
 import { evasionApplies } from "./save-rules.mjs";
 import { chooseSaveMetamagic } from "./metamagic.mjs";
 import { chooseSculpted, potentCantripSave } from "./wizard.mjs";
+import { offerInterposeShield } from "./reactions.mjs";
 import { MODULE_ID, debug, promptChoice, getSaveAutomation, escapeHTML, pendingLuckDamage, socket, pendingLuckChecks, pendingSaveRequests, getPrimaryGM, activePlayerOwner, abilityLabel, resolveTarget, NO_DIALOG, antimagicStops, isLike } from "./shared.mjs";
 import { tokensInActivityArea, chooseAffected, regionsOf, needsConfirmation, confirmTargets } from "./targeting.mjs";
 
@@ -311,6 +312,9 @@ export async function applySaveDamage(activity, targets, outcome, usage = null) 
     // Evasion (the "saveRules" setting): none on a success, half on a failure.
     if (evasionApplies((await resolveTarget(t)).actor, ability, onSave)) {
       list.push({ ...t, saved, multiplier: saved ? 0 : 0.5, notes: ["Evasion"] });
+    } else if (saved && ability === "dex" && onSave === "half" && await offerInterposeShield(t, { sourceName: activity.item?.name ?? activity.name })) {
+      // Shield Master's Interpose Shield (reactions.mjs): its reaction for no damage.
+      list.push({ ...t, saved, multiplier: 0, notes: ["Interpose Shield"] });
     } else list.push({ ...t, saved, multiplier: saved ? savedMultiplier : 1, ...(saved && potent ? { notes: ["Potent Cantrip"] } : {}) });
   }
   await requestApplyDamage(damageMessage, list, { outcomeKey: usage?.id });

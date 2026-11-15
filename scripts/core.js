@@ -432,6 +432,10 @@ function isWallSpellsEnabled() {
   try { return game.settings.get(MODULE_ID, "wallSpells"); } catch { return false; }
 }
 
+function isTeleportRangeEnabled() {
+  try { return game.settings.get(MODULE_ID, "teleportRange"); } catch { return false; }
+}
+
 function isRayAutomationEnabled() {
   try { return game.settings.get(MODULE_ID, "rayAutomation"); } catch { return false; }
 }
@@ -685,7 +689,9 @@ Hooks.once("init", () => {
           "marked In Sunlight in its configuration: disadvantage on attacks and checks — 2014: Perception). Also Empowered " +
           "Evocation (+Intelligence to an evoker's Evocation spell's first damage roll), Toll the Dead (d12s against a creature " +
           "missing Hit Points) and Brutal Strike's options (their effect on the target; Forceful Blow pushes 15 ft; Sundering " +
-          "Blow's +5 on the next attack roll by someone else). " +
+          "Blow's +5 on the next attack roll by someone else). The Help action: using a feature named \"Help\" (or the LDA.help() " +
+          "macro) gives an ally's next attack roll against an enemy within 5 ft Advantage, or an ally's next ability check " +
+          "(2024: with a skill or tool you're proficient in). Crusher's and Slasher's critical-hit effects are read here too. " +
           "Shown in the roll window and on the card. With Automated Conditions 5e active, the checks it performs are " +
           "left to it, except where its feats differ from the rules (Gunner, 2024 Crossbow Expert).",
     scope: "world",
@@ -707,7 +713,9 @@ Hooks.once("init", () => {
           "advantage on saves against being charmed or frightened. Staggered (Brutal Strike): disadvantage on the next save. " +
           "Sanctuary: an attack roll or damaging spell at the warded creature waits for the attacker's Wisdom save; a failure " +
           "loses that target (the ward ends when the warded creature attacks, casts or deals damage). Aura of Courage: no " +
-          "Frightened effect lands on the paladin or its allies in the aura, and frightened attackers there roll normally. Shown " +
+          "Frightened effect lands on the paladin or its allies in the aura, and frightened attackers there roll normally. Mage " +
+          "Slayer: damage from it gives a concentration save Disadvantage; 2014: Advantage on saves against spells cast " +
+          "from within 5 ft. Shown " +
           "in the roll window and on the card. With Automated Conditions 5e automating statuses, automatic failures are " +
           "left to it.",
     scope: "world",
@@ -723,7 +731,8 @@ Hooks.once("init", () => {
           "and 2014 Resistance on saves (used up, ending the spell), the Lucky feat (roll another d20 and use the higher — " +
           "and when an attack hits you, the attacker rolls another and uses the lower) and Indomitable (reroll a failed save; " +
           "2024 adds your Fighter level), Dark One's Own Luck (+1d10 to a check or save, from its uses), Tactical Mind (+1d10 " +
-          "to a failed check, a Second Wind use spent only if it succeeds) and Stroke of Luck (the d20 becomes a 20). 2024 Guidance adds " +
+          "to a failed check, a Second Wind use spent only if it succeeds), Stroke of Luck (the d20 becomes a 20) and Mage Slayer's " +
+          "Guarded Mind (a failed Intelligence, Wisdom or Charisma save succeeds instead). 2024 Guidance adds " +
           "its d4 through dnd5e already. Also Indomitable Might, applied on " +
           "its own: a Strength check (2024: or save) below your Strength score uses the score.",
     scope: "world",
@@ -803,7 +812,11 @@ Hooks.once("init", () => {
     "In combat, when a creature would move out of an enemy's reach, it stops at the last spot in reach and the enemy is offered " +
     "an opportunity attack (its player, or the GM for NPCs), if it has its reaction; then it carries on. Not provoked when " +
     "Disengaged (a status the module applies from Disengage features, or toggle it on the token HUD), teleporting, or being moved. " +
-    "An enemy that's Shocked (Shocking Grasp) or Staggered (Brutal Strike), or can't take reactions, makes none.");
+    "An enemy that's Shocked (Shocking Grasp) or Staggered (Brutal Strike), or can't take reactions, makes none. Feats: " +
+    "Sentinel (a hit stops the creature for the turn; 2014: Disengage doesn't help; 2024: a creature within 5 ft that " +
+    "Disengages or hits someone else provokes one; 2014: one that attacks someone else can be attacked), Polearm Master " +
+    "(an attack when a creature comes into your reach) and 2014 Mage Slayer (an attack when a creature within 5 ft casts " +
+    "a spell).");
   nativeToggle("retaliation", "Retaliation Damage",
     "Armor of Agathys (while its temporary HP last) and Fire Shield (within 5 ft) deal their damage back to a creature that " +
     "hits the caster with a melee attack.");
@@ -826,6 +839,10 @@ Hooks.once("init", () => {
     "a new Wall of Force, Stone or Ice cuts through is pushed to the side the caster's player (or the GM) picks. Solid ones " +
     "(Wall of Force, Stone, Ice; Forcecage's box) give total cover: no attacking or casting at creatures behind them, and " +
     "area spells stop at them.");
+  nativeToggle("teleportRange", "Teleport Range",
+    "dnd5e's Teleport button (Misty Step, Fey Step, Thunder Step, Dimension Door…) stops a drag at the spell's range, but a " +
+    "click on the canvas can land anywhere. This checks where the teleport would land before the token moves: beyond the " +
+    "range, onto another creature, or (for a teleport to a space you can see) out of sight, and it's turned down and you pick again.");
   nativeToggle("turnSummary", "Start-of-Turn Summary",
     "When a creature's turn starts in combat, whisper its owners a summary: effects and their durations, concentration, saves " +
     "due at the end of the turn, lingering areas it's in, death saves, legendary actions and resistances.");
@@ -924,7 +941,11 @@ Hooks.once("init", () => {
           "The 2024 smites (Searing, Thunderous, Wrathful, Shining) on a melee hit, like Divine Smite — then their effect and " +
           "save (Thunderous: pushed 10 ft and Prone; Searing burns at the start of the target's turns). " +
           "Stunning Strike: after a Monk weapon or Unarmed Strike hit, offer to spend a Focus Point; the save is rolled by " +
-          "the save automation (Full: Stunned on a failure; Speed halved and Advantage on the next attack against it on a success).",
+          "the save automation (Full: Stunned on a failure; Speed halved and Advantage on the next attack against it on a success). " +
+          "2024 Cunning Strike: with Sneak Attack, pick its effects (Poison, Trip, Withdraw; Devious Strikes' Daze, Knock Out, " +
+          "Obscure), paid for with Sneak Attack dice; their saves follow. Crusher (push 5 ft; a critical hit gives attacks " +
+          "against it Advantage), Piercer (reroll a low damage die; one more die on a critical hit) and Slasher (−10 ft Speed; " +
+          "a critical hit gives it Disadvantage on attacks), by the damage type.",
     scope: "world",
     config: true,
     type: Boolean,
@@ -965,7 +986,9 @@ Hooks.once("init", () => {
           "no slot spent if it fails; 2014: automatic up to its slot level, else an ability check); on a save failed against " +
           "being charmed or frightened: 2024 Countercharm from the roller or a bard within 30 ft (rerolled with advantage). Asked of the " +
           "creature's player (or the GM); each is used through dnd5e. One reaction per creature until its next turn " +
-          "(shared with opportunity attacks), shown in combat by a Reaction Used status you can toggle on the token HUD.",
+          "(shared with opportunity attacks), shown in combat by a Reaction Used status you can toggle on the token HUD. Also " +
+          "Shield Master's Interpose Shield: after a successful Dexterity save against half damage, holding a shield, take " +
+          "none (with Save Automation on Full).",
     scope: "world",
     config: true,
     type: String,
@@ -1165,7 +1188,7 @@ return {
   whisperLuckRegain, maybeRegainLuckDie,
   isLuckDiceEnabled, isInspirationEnabled, getAttackAutomation, getSaveAutomation, getPrivateRollOutcome,
   isEffectAutomationEnabled, isHealingAutomationEnabled,
-  isDamageOnlyAutomationEnabled, isConcentrationBreakEnabled, isConcentrationAutoRollEnabled, isOnHitRidersEnabled, isLingeringAreasEnabled, isRepeatSavesEnabled, getReactionPrompts, isSkipAttackDialogEnabled, isAttackAdvantageEnabled, getLegendaryResistance, isWeaponMasteryEnabled, isAutoCritsEnabled, isOpportunityAttacksEnabled, isRetaliationEnabled, isDeathSavesEnabled, isClearInstantAreasEnabled, isTurnSummaryEnabled, isWallSpellsEnabled, isRayAutomationEnabled, getTargetConfirmation, isSaveRulesEnabled, isRollBoostsEnabled, isInvocationsEnabled, isMetamagicEnabled,
+  isDamageOnlyAutomationEnabled, isConcentrationBreakEnabled, isConcentrationAutoRollEnabled, isOnHitRidersEnabled, isLingeringAreasEnabled, isRepeatSavesEnabled, getReactionPrompts, isSkipAttackDialogEnabled, isAttackAdvantageEnabled, getLegendaryResistance, isWeaponMasteryEnabled, isAutoCritsEnabled, isOpportunityAttacksEnabled, isRetaliationEnabled, isDeathSavesEnabled, isClearInstantAreasEnabled, isTurnSummaryEnabled, isWallSpellsEnabled, isTeleportRangeEnabled, isRayAutomationEnabled, getTargetConfirmation, isSaveRulesEnabled, isRollBoostsEnabled, isInvocationsEnabled, isMetamagicEnabled,
   actorHasInspiration, consumeInspiration, evaluateInspirationReroll,
   HISTORY_FLAG, diceFaces, renderLuckSection, requestRollActors,
   readCardHistory, updateRollCard, recordCardStep, finishCardHistory, cardReporter,

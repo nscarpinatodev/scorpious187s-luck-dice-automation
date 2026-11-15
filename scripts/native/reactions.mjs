@@ -131,6 +131,12 @@ export const REACTIONS = {
     when: "failedSave", label: () => "Countercharm (reroll the save with Advantage)",
     useful: ({ item }) => rulesOf(item) !== "2014"
   },
+  // Shield Master's Interpose Shield (2014 and 2024): a successful Dexterity save against half damage, holding a shield —
+  // no damage at all (saves.mjs asks, as the save automation applies the damage). Nothing to roll: used here.
+  "shield-master": {
+    when: "saved", manual: true, label: () => "Interpose Shield (take no damage)",
+    useful: ({ actor }) => holdsShield(actor)
+  },
   "hellish-rebuke": { when: "afterDamage", label: (_actor, { attackerName }) => `Hellish Rebuke at ${attackerName}`, useful: ({ attacker }) => !!attacker },
   // Invocations: used here (no dnd5e activity needed), spending the invocation's uses where it has them.
   "rebuke-of-the-talisman": {
@@ -144,6 +150,10 @@ export const REACTIONS = {
     useful: () => true
   }
 };
+
+/** Whether a creature has a shield equipped. */
+export const holdsShield = (actor) => [...(actor?.items ?? [])].some(i => i.type === "equipment" && i.system?.equipped
+  && (i.system?.type?.value === "shield" || i.system?.armor?.type === "shield"));
 
 const tombHP = (actor) => 10 * (Number(actor?.classes?.warlock?.system?.levels ?? 0) || 0);
 
@@ -296,6 +306,8 @@ export async function answerReaction(payload) {
       ? `<strong>${escapeHTML(targetName ?? "A creature")}</strong> succeeded on a ${escapeHTML(rollType ?? "roll")} (${total}${finite(ac) ? ` vs DC ${ac}` : ""})`
     : when === "failedSave"
       ? `<strong>${escapeHTML(targetName ?? "A creature")}</strong> failed a ${escapeHTML(rollType ?? "saving throw")} (${total}${finite(ac) ? ` vs DC ${ac}` : ""})`
+    : when === "saved"
+      ? `<strong>${escapeHTML(name)}</strong> succeeded on a Dexterity saving throw against ${escapeHTML(attackerName ?? "an effect")} (half damage)`
     : when === "damage"
       ? `<strong>${escapeHTML(name)}</strong> is about to take ${escapeHTML(types.join(", ") || "")} damage from ${escapeHTML(attackerName ?? "an attack")}`
       : `<strong>${escapeHTML(attackerName ?? "A creature")}</strong> damaged <strong>${escapeHTML(name)}</strong>`;
@@ -626,6 +638,21 @@ export async function damageReactions(message, target, damages) {
   // Superior Hunter's Defense: this damage is halved above; later damage of the type this turn, by the resistance.
   const afterApply = answer.resistType ? () => actor.createEmbeddedDocuments("ActiveEffect", [hunterDefenseEffect(answer.resistType)]) : null;
   return { damages: adjusted, notes: [answer.label], afterApply };
+}
+
+/**
+ * Interpose Shield (saves.mjs, applying a save's damage): a creature that made its Dexterity save against half damage,
+ * holding a shield, may use its reaction to take none. Resolves true when it does.
+ */
+export async function offerInterposeShield(target, { sourceName = null } = {}) {
+  const mode = getReactionPrompts();
+  const { actor, tokenDoc } = await resolveTarget(target);
+  if (!asksFor(actor, mode) || !hasReaction(actor) || INCAPACITATING.some(s => actor.statuses?.has?.(s))) return false;
+  const options = reactionOptions(actor, {}, "saved");
+  if (!options.length) return false;
+  const answer = await askReaction(actor, { token: tokenDoc?.uuid ?? target.token, actor: actor.uuid, options, when: "saved",
+    attackerName: sourceName, targetName: tokenDoc?.name ?? actor.name });
+  return answer?.identifier === "shield-master";
 }
 
 /** After damage is applied: Hellish Rebuke for those it hurt. Not awaited by the damage application. */

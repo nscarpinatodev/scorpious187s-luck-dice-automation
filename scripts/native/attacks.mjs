@@ -5,6 +5,8 @@ import { requestApplyDamage } from "./apply.mjs";
 import { applyHitEffects } from "./effects.mjs";
 import { handlePrivateAttack } from "./outcome.mjs";
 import { addOnHitRiders, applySavageAttacker } from "./riders.mjs";
+import { applyDamageFeats } from "./feats.mjs";
+import { offerSentinel } from "./opportunity.mjs";
 import { offerReactions, reactionMultiplier } from "./reactions.mjs";
 import { applyWeaponMastery, CLEAVE_FLAG } from "./mastery.mjs";
 import { applyStunningStrike } from "./monk.mjs";
@@ -105,6 +107,7 @@ export async function onAttackRolled(rolls, data) {
     await applyStudiedAttacks(message, activity); // a miss: Advantage on the next attack at that creature
     await applyStunningStrike(message, activity);
     await applyInvocationsOnHit(message, activity); // Repelling Blast, Grasp of Hadar, Lance of Lethargy
+    await offerSentinel(message, activity); // a Sentinel within 5 ft of the attacker may react
   } catch (err) {
     console.error(`[${MODULE_ID}] native attack error:`, err);
   }
@@ -191,6 +194,7 @@ export async function onDamageRolled(rolls, data) {
     // On-hit riders (any attacker), before the Luck Dice so the prompt follows them.
     if (attackCard) await applySavageAttacker(message, activity);
     if (attackCard) await addOnHitRiders(message, activity, attackCard);
+    if (attackCard) await applyDamageFeats(message, activity, attackCard); // Crusher, Piercer, Slasher
     // Empowered Spell: reroll some of a spell's damage dice, before any Luck Dice are added.
     await offerEmpowered(message, activity);
 

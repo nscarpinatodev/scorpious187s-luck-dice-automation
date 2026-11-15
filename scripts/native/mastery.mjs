@@ -33,6 +33,10 @@ import { MODULE_ID, debug, escapeHTML, promptChoice, isWeaponMasteryEnabled, get
 export const MASTERY_FLAG = "mastery";          // on a mastery effect: { kind, attacker, target }
 export const MASTERY_RESULT_FLAG = "masteryResult"; // on the attack card: what the mastery did
 export const CLEAVE_FLAG = "cleave";            // on a Cleave attack's card: true
+// The marks the GM may put on a creature for another client (applyMasteryGM): Weapon Mastery's, and the features that
+// work the same way — Stunning Strike, Studied Attacks, Silvery Barbs, Sentinel's Halt, Crusher, Slasher, Mage Slayer, Help.
+export const MARK_KINDS = ["sap", "slow", "vex", "lethargy", "stunning-strike", "studied-attacks", "silvery-barbs",
+  "sentinel-halt", "crusher", "slasher", "slasher-slow", "mage-slayer", "help", "help-check"];
 
 const LABELS = { graze: "Graze", topple: "Topple", sap: "Sap", vex: "Vex", slow: "Slow", push: "Push", cleave: "Cleave", nick: "Nick" };
 const PUSHABLE = new Set(["tiny", "sm", "med", "lg"]);
@@ -98,7 +102,7 @@ export async function applyMasteryGM(change) {
     if (tokenDoc && Number.isFinite(change.x) && Number.isFinite(change.y)) await tokenDoc.update({ x: change.x, y: change.y }, { [MODULE_ID]: { forced: true } });
     return;
   }
-  if (["sap", "slow", "vex", "lethargy", "stunning-strike", "studied-attacks", "silvery-barbs"].includes(change.kind) && change.effect?.flags?.[MODULE_ID]?.[MASTERY_FLAG]?.kind === change.kind) {
+  if (MARK_KINDS.includes(change.kind) && change.effect?.flags?.[MODULE_ID]?.[MASTERY_FLAG]?.kind === change.kind) {
     await actor.createEmbeddedDocuments("ActiveEffect", [change.effect]);
   }
 }
@@ -179,7 +183,15 @@ async function markEffect(kind, activity, hits) {
   return done.length ? done.join("; ") : null;
 }
 
-/** Where a 10 ft push straight away from the attacker lands, stopping short of walls. */
+/** Whether another creature's token takes up any of this spot (a token's top-left, in its own size). */
+export function spaceTaken(tokenDoc, x, y) {
+  const size = canvas?.grid?.size ?? 100;
+  const w = (tokenDoc.width ?? 1) * size, h = (tokenDoc.height ?? 1) * size;
+  return [...(tokenDoc.parent?.tokens ?? [])].some(t => t.id !== tokenDoc.id && t.actor
+    && x < t.x + (t.width ?? 1) * size - 1 && t.x < x + w - 1 && y < t.y + (t.height ?? 1) * size - 1 && t.y < y + h - 1);
+}
+
+/** Where a 10 ft push straight away from the attacker lands, stopping short of walls and other creatures. */
 export function pushDestination(attackerDoc, targetDoc, feet = 10) {
   const grid = canvas?.grid;
   if (!grid || !attackerDoc || !targetDoc) return null;
@@ -199,6 +211,7 @@ export function pushDestination(attackerDoc, targetDoc, feet = 10) {
     if (blocked) continue;
     const topLeft = { x: dest.x - (targetDoc.width * grid.size) / 2, y: dest.y - (targetDoc.height * grid.size) / 2 };
     const snapped = grid.getSnappedPoint?.(topLeft, { mode: globalThis.CONST?.GRID_SNAPPING_MODES?.TOP_LEFT_CORNER ?? 16 }) ?? topLeft;
+    if (spaceTaken(targetDoc, Math.round(snapped.x), Math.round(snapped.y))) continue; // a creature there: it stops short
     return { x: Math.round(snapped.x), y: Math.round(snapped.y), feet: step };
   }
   return null;

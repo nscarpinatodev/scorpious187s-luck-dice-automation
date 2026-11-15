@@ -10,7 +10,8 @@
 //             version against those), Divine Strike and Primal Strike (weapon
 //             hit, once per turn, their damage type picked) and Colossus Slayer
 //             (a target missing Hit Points, once per turn, the weapon's damage
-//             type): offered as checkboxes.
+//             type): offered as checkboxes. With 2024 Cunning Strike, Sneak Attack then asks which of its
+//             effects to pay for with its dice (cunning.mjs).
 // Savage Attacker (applySavageAttacker, below) rolls a weapon hit's dice twice.
 // Each rider's own damage activity rolls its dice — as critical damage on a
 // critical hit — and they join the hit's damage card, so the damage tray and the
@@ -29,6 +30,7 @@ import { tokenDistance, rulesOf } from "./advantage.mjs";
 import { isPactWeapon } from "./invocations.mjs";
 import { applyMasteryChange } from "./mastery.mjs";
 import { smiteAfter } from "./smites.mjs";
+import { cunningConfigure, cunningAfter } from "./cunning.mjs";
 
 export const RIDERS_FLAG = "riders";
 
@@ -50,7 +52,9 @@ export const RIDERS = {
     eligible: ({ activity, card, tokens }) => isWeaponAttack(activity)
       && (activity.item?.system?.properties?.has?.("fin") || isRanged(activity, card))
       && sneakAttackAllowed(activity, card, tokens),
-    activities: (item) => damageActivities(item).slice(0, 1)
+    activities: (item) => damageActivities(item).slice(0, 1),
+    // 2024 Cunning Strike (cunning.mjs): effects paid for with Sneak Attack dice, then their saves.
+    configure: cunningConfigure, after: cunningAfter
   },
   "divine-smite": {
     mode: "choose", checked: false,
@@ -390,12 +394,14 @@ export async function addOnHitRiders(message, activity, card) {
       rolls.push(...riderRolls);
       if (riderRolls.length) added.push({ name: choice.item.name, formula: riderRolls.map(r => r.formula).join(" + "), total: riderRolls.reduce((s, r) => s + r.total, 0) });
     }
+    // A step before the dice (Sneak Attack's Cunning Strike): it can swap the activity and set its scaling.
+    if (choice.rider.configure) await choice.rider.configure(choice, { activity, card, hits });
     const type = choice.activities.length ? await riderDamageType(choice, message) : null;
     for (const [index, base] of choice.activities.entries()) {
       // Only the first activity is used (spends the resource); the rest just roll.
       const act = index === 0 ? await riderActivity(choice, base) : base;
       if (!act) break;
-      const riderRolls = await act.rollDamage({ isCritical, ...NO_DIALOG }, { configure: false }, { create: false });
+      const riderRolls = await act.rollDamage({ isCritical, ...(choice.scaling ? { scaling: choice.scaling } : {}), ...NO_DIALOG }, { configure: false }, { create: false });
       if (!riderRolls?.length) continue;
       if (type) for (const r of riderRolls) Object.assign(r.options, { type, types: [type] });
       for (const r of riderRolls) await showRollToAdd(r);

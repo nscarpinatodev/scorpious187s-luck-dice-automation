@@ -32,6 +32,7 @@
 import { ac5eCovers, tokenDistance, rulesOf, mergeRollMode, ensureFinalModeHook, reasonsHTML, silveryMark, staggeredSave, SAVE_REASONS_FLAG } from "./advantage.mjs";
 import { countercharmFor } from "./bard.mjs";
 import { inSunlight, sunlightSensitivity } from "./sunlight.mjs";
+import { helpCheckMark, mageSlayerMark } from "./feats.mjs";
 import { MODULE_ID, debug, escapeHTML, isSaveRulesEnabled, isAttackAdvantageEnabled } from "./shared.mjs";
 
 export { SAVE_REASONS_FLAG };
@@ -114,7 +115,7 @@ export function auraOfProtection(actor, tokenDoc) {
  * The rules for this save: { advantage: [], disadvantage: [], autoFail: label | null, bonuses: [{ label, value, key }] }.
  * `source` is what it's against (saveSource); `tokenDoc` the creature's token, for its aura.
  */
-export function saveReasons(actor, ability, source = {}, { tokenDoc = null } = {}) {
+export function saveReasons(actor, ability, source = {}, { tokenDoc = null, concentration = false } = {}) {
   const advantage = [], disadvantage = [], bonuses = [], consume = [];
   let autoFail = null, autoFailBy = null;
   if (ability === "str" || ability === "dex") {
@@ -141,6 +142,15 @@ export function saveReasons(actor, ability, source = {}, { tokenDoc = null } = {
   // Brutal Strike's Staggering Blow: disadvantage on the next save (then spent, the effect itself staying).
   const staggered = staggeredSave(actor);
   if (staggered) { disadvantage.push("Staggered"); consume.push(staggered.uuid); }
+  // Mage Slayer (feats.mjs): damage from its owner gives this concentration save Disadvantage (then spent).
+  const slayer = concentration ? mageSlayerMark(actor) : null;
+  if (slayer) { disadvantage.push("Mage Slayer"); consume.push(slayer.uuid); }
+  // 2014 Mage Slayer: Advantage on saves against spells cast by a creature within 5 ft.
+  const slayer14 = feature(actor, "mage-slayer");
+  if (slayer14 && rulesOf(slayer14) === "2014" && source.spell && tokenDoc) {
+    const caster = doc(source.activity?.getUsageToken?.() ?? source.activity?.actor?.getActiveTokens?.()?.[0]);
+    if (caster && caster.id !== tokenDoc.id && caster.parent === tokenDoc.parent && tokenDistance(caster, tokenDoc) <= 5) advantage.push("Mage Slayer");
+  }
   const aura = auraOfProtection(actor, tokenDoc);
   if (aura) bonuses.push(aura);
   return { advantage, disadvantage, autoFail, autoFailBy, bonuses, consume };
@@ -184,7 +194,7 @@ export function onPreRollSave(config, dialog, message) {
   if (!actor?.system?.abilities || !config.ability) return;
   let reasons;
   try {
-    reasons = rules ? saveReasons(actor, config.ability, source ?? saveSource(message), { tokenDoc: saverToken(actor, message) })
+    reasons = rules ? saveReasons(actor, config.ability, source ?? saveSource(message), { tokenDoc: saverToken(actor, message), concentration: !!config.isConcentration })
       : { advantage: [], disadvantage: [], autoFail: null, autoFailBy: null, bonuses: [], consume: [] };
   } catch (err) { console.error(`[${MODULE_ID}] save rules:`, err); return; }
   if (barbs) { reasons.advantage.push("Silvery Barbs"); reasons.consume = [...(reasons.consume ?? []), barbs.uuid]; }
@@ -231,9 +241,13 @@ export function onPreRollCheck(config, dialog, message) {
   const sun = sunlightSensitivity(actor);
   const sunlit = sun && isAttackAdvantageEnabled() && inSunlight(doc(actor?.getActiveTokens?.()?.[0]))
     && (rulesOf(sun) !== "2014" || config?.skill === "prc");
-  if (!barbs && !sunlit) return;
-  const reasons = { advantage: barbs ? ["Silvery Barbs"] : [], disadvantage: sunlit ? ["Sunlight Sensitivity"] : [], autoFail: null,
-    bonuses: [], consume: barbs ? [barbs.uuid] : [] };
+  // The Help action (feats.mjs, with Attack Rules): Advantage on the next check — 2024, with the skill or tool it named.
+  const helped = isAttackAdvantageEnabled() ? helpCheckMark(actor, { skill: config?.skill ?? null, tool: config?.tool ?? null }) : null;
+  if (!barbs && !sunlit && !helped) return;
+  const helper = helped?.getFlag?.(MODULE_ID, "mastery")?.helperName;
+  const reasons = { advantage: [...(barbs ? ["Silvery Barbs"] : []), ...(helped ? [`Help${helper ? ` (${helper})` : ""}`] : [])],
+    disadvantage: sunlit ? ["Sunlight Sensitivity"] : [], autoFail: null,
+    bonuses: [], consume: [barbs?.uuid, helped?.uuid].filter(Boolean) };
   reasons.finalMode = mergeRollMode(config, dialog, reasons);
   ensureFinalModeHook();
   if (message) foundry.utils.setProperty(message, `data.flags.${MODULE_ID}.${SAVE_REASONS_FLAG}`, reasons);

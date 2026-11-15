@@ -45,6 +45,9 @@ import { onCountercharmUsed } from "./bard.mjs";
 import { onTurnStartSearing } from "./smites.mjs";
 import { onPreApplyDamageMonsters, onDamageAppliedMonsters, onTurnStartRegeneration } from "./monsters.mjs";
 import { onPreRollDamageFeatures, onFeatureUsed, onPreApplyDamageWard } from "./features.mjs";
+import { onPreTeleport, onTeleport } from "./teleport.mjs";
+import { onPreRollDamagePiercer, onPreApplyDamageMageSlayer, onHelpUsed, help } from "./feats.mjs";
+import { mageSlayerOnCast } from "./opportunity.mjs";
 import { rollExtras, markBoostTargets, markBardicGM, consumeBoostGM, endBoostSpellGM } from "./boosts.mjs";
 import { onPreRollAttackInvocations, onPreRollDamageInvocations, onDamageAppliedGift, onTurnStartCloak, onMaddeningHexUsed } from "./invocations.mjs";
 import { onPreUseMetamagic, onRenderUsageDialog, onMetamagicUsed, onPreRollDamageMetamagic, onPreRollConcentrationMetamagic } from "./metamagic.mjs";
@@ -75,6 +78,8 @@ Hooks.once("ready", () => {
   installSanctuary();
   // Bardic Inspiration, Lucky… in the shared prompts — also the roll-request window's (skill-check.js).
   LDA.rollExtras = rollExtras;
+  // The Help action, for a macro: LDA.help() helps from the selected token.
+  LDA.help = (token = canvas.tokens?.controlled?.[0]) => help(token).catch(err => console.error(`[${MODULE_ID}] help:`, err));
 
   // Socket work between clients, via scorpious187s-lib's router. "gm" handlers run
   // on the primary active GM only, so nothing is rolled or applied twice; "any"
@@ -169,6 +174,7 @@ Hooks.once("ready", () => {
   Hooks.on("dnd5e.preRollDamageV2", onPreRollDamageFeats); // 2024 Crossbow Expert's off-hand damage; never cancels
   Hooks.on("dnd5e.preRollDamageV2", onPreRollDamageCleave); // a Cleave attack's damage: no ability modifier; never cancels
   Hooks.on("dnd5e.preRollDamageV2", onPreRollDamageFeatures); // Empowered Evocation, Toll the Dead; never cancels
+  Hooks.on("dnd5e.preRollDamageV2", onPreRollDamagePiercer);  // Piercer's extra critical die; never cancels
   Hooks.on("dnd5e.preRollDamageV2", onPreRollDamageRedirect); // Deflect Attacks' redirect: the attack's damage type; never cancels
   Hooks.on("dnd5e.preRollDamageV2", skipAutoRolledDamageDialog); // never cancels
   Hooks.on("dnd5e.rollAttackV2", (rolls) =>
@@ -207,6 +213,7 @@ Hooks.once("ready", () => {
   Hooks.on("dnd5e.preApplyDamage", onPreApplyDamageRelentless); // after the death saves' (massive damage); never cancels
   Hooks.on("dnd5e.preApplyDamage", onPreApplyDamageMonsters);   // Undead Fortitude, Regeneration's blocking damage; never cancels
   Hooks.on("dnd5e.preApplyDamage", onPreApplyDamageSanctuary);  // a warded creature dealing damage ends its ward; never cancels
+  Hooks.on("dnd5e.preApplyDamage", onPreApplyDamageMageSlayer); // Mage Slayer: the concentration save to come has Disadvantage; never cancels
   Hooks.on("dnd5e.applyDamage", (actor) => onDamageAppliedMonsters(actor).catch(err => console.error(`[${MODULE_ID}] undead fortitude:`, err)));
   Hooks.on("dnd5e.applyDamage", (actor) => onDamageAppliedDeath(actor).catch(err => console.error(`[${MODULE_ID}] death:`, err)));
   // Relentless Rage first: a barbarian back on its feet doesn't need Gift of the Protectors.
@@ -237,6 +244,9 @@ Hooks.once("ready", () => {
     onTokenMoved(tokenDoc, movement).catch(err => console.error(`[${MODULE_ID}] lingering move:`, err));
   });
   Hooks.on("preMoveToken", onPreMoveTokenOA); // returns false only to remake the movement in legs
+  // Teleport range: dnd5e's Teleport button lands where a click says; out of range, taken or out of sight is turned down.
+  Hooks.on("dnd5e.preTeleport", onPreTeleport); // never cancels
+  Hooks.on("dnd5e.teleport", onTeleport);       // returns false only to turn the destination down
   Hooks.on("updateRegion", (region, changes) =>
     onRegionChanged(region, changes).catch(err => console.error(`[${MODULE_ID}] lingering region:`, err)));
   // dnd5e's concentration prompt when a concentrating creature takes damage.
@@ -263,6 +273,8 @@ Hooks.once("ready", () => {
     onDisengageUsed(activity).catch(err => console.error(`[${MODULE_ID}] disengage:`, err));
     onCountercharmUsed(activity).catch(err => console.error(`[${MODULE_ID}] countercharm:`, err)); // 2014: the performance
     onFeatureUsed(activity, usageConfig, results).catch(err => console.error(`[${MODULE_ID}] class features:`, err)); // Empowered Evocation, Brutal Strike, Arcane Ward
+    onHelpUsed(activity).catch(err => console.error(`[${MODULE_ID}] help:`, err));
+    mageSlayerOnCast(activity).catch(err => console.error(`[${MODULE_ID}] mage slayer:`, err)); // 2014: a reaction attack at the caster
     recordAgathys(activity, usageConfig).catch(err => console.error(`[${MODULE_ID}] armor of agathys:`, err));
     markBoostTargets(activity, results).catch(err => console.error(`[${MODULE_ID}] roll boosts:`, err));
     const followUp = usageConfig?.subsequentActions !== false;
