@@ -10,6 +10,7 @@ import { applyWeaponMastery, CLEAVE_FLAG } from "./mastery.mjs";
 import { applyStunningStrike } from "./monk.mjs";
 import { applyStudiedAttacks } from "./fighter.mjs";
 import { potentCantripMiss } from "./wizard.mjs";
+import { applyMirrorImage } from "./illusions.mjs";
 import { autoRolledEnabled } from "./autoroll.mjs";
 import { applyRetaliation } from "./retaliation.mjs";
 import { rollExtras } from "./boosts.mjs";
@@ -92,7 +93,8 @@ export async function onAttackRolled(rolls, data) {
       }
     }
 
-    // The creatures hit may react (Shield can turn the hit into a miss).
+    // Mirror Image's duplicates may take it; then the creatures hit may react (Shield can turn the hit into a miss).
+    await applyMirrorImage(message, activity);
     await offerReactions(message, activity);
     await syncAutomatedAnimations(message, activity);
     await handlePrivateAttack(message, activity);

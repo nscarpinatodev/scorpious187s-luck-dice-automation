@@ -36,7 +36,10 @@ Your GM chooses which of these are on. The setting each one belongs to is in bra
 | **Range** | Disadvantage at long range, and on a ranged attack with an enemy within 5 ft of you. Crossbow Expert, Sharpshooter, Spell Sniper and Gunner remove these where their rules say so. An attack beyond long range is stopped with a message. |
 | **Your conditions** | Prone, Restrained or Blinded give disadvantage. Frightened gives disadvantage while you can see what frightened you. Invisible gives advantage. |
 | **Your target's conditions** | Advantage against a target that's Restrained, Blinded, Paralyzed, Stunned, Unconscious or Petrified. Against a Prone target: advantage within 5 ft, disadvantage farther away. Disadvantage against a target that's Invisible or Dodging. |
-| **Features and spells** | Reckless Attack (yours, or the target's), Faerie Fire, Guiding Bolt, Grappler against a creature you're grappling, and disadvantage with a Heavy weapon you're too small or too weak to wield well. |
+| **Features and spells** | Reckless Attack (yours, or the target's), Faerie Fire, Guiding Bolt, Shining Smite on the target, Grappler against a creature you're grappling, Pack Tactics (an ally of yours within 5 ft of the target), disadvantage against a creature under Blur (unless you have blindsight or truesight), and disadvantage with a Heavy weapon you're too small or too weak to wield well. |
+| **Mirror Image** | When the target is under Mirror Image, a duplicate may take the attack instead (2024: a d6 per duplicate on a hit, any 3 or more; 2014: a d20 for every attack). The card says what happened. Blindsight and truesight see through it. |
+| **Sanctuary** | Attacking a creature warded by Sanctuary, or aiming a damaging spell at it, you make a Wisdom save first. On a failure you lose that target; with none left, the attack or spell is lost. |
+| **Sunlight Sensitivity** | On a scene your GM has marked as in sunlight, a creature with Sunlight Sensitivity has disadvantage on its attack rolls and ability checks (2014: Perception checks). |
 | **One-time marks** | Vex, Sap, Studied Attacks (after a Fighter misses a creature), Stunning Strike's advantage and Silvery Barbs' advantage (which also works on your next check or save). These apply to the next attack only and are used up by it. |
 | **Elusive** | A Rogue with Elusive can't be attacked with advantage from any source, unless they're Incapacitated. The card lists the advantage that was ignored. |
 | **Cover** | Spell Sniper and Sharpshooter ignore half and three-quarters cover. The card shows the target's AC without the cover bonus. |
@@ -78,7 +81,7 @@ Advantage and disadvantage from any sources cancel out, as the rules say. Checks
 | **Transmuted Spell** | The damage type you picked replaces the spell's. *(Metamagic)* |
 | **Marks** | Hunter's Mark and Hex are added automatically when every creature you hit carries your mark. *(On-Hit Riders)* |
 | **Potent Cantrip (2024)** | An Evoker's damaging cantrip that misses still deals half its damage, with no other effect. *(Attack Rules)* |
-| **Choices on a hit** | Sneak Attack, Divine Smite, Divine Strike, Primal Strike and Colossus Slayer are offered as checkboxes when the hit's damage is rolled, where they apply. Savage Attacker rolls your weapon dice twice and keeps the better total. *(On-Hit Riders)* |
+| **Choices on a hit** | Sneak Attack, Divine Smite, the 2024 smites (Searing, Thunderous, Wrathful and Shining Smite), Divine Strike, Primal Strike and Colossus Slayer are offered as checkboxes when the hit's damage is rolled, where they apply. A smite's save and effect follow it. Savage Attacker rolls your weapon dice twice and keeps the better total. *(On-Hit Riders)* |
 
 ## What's offered after a roll
 
@@ -103,6 +106,7 @@ These are the only things you'll see happen without rolling anything yourself.
 - Opportunity attacks are offered when a creature moves out of reach.
 - Lingering spell areas, such as Spirit Guardians or Cloud of Daggers, affect creatures as they move into them or take turns in them, following each spell's wording.
 - Repeat saves against a condition are rolled at the end of your turn.
+- Searing Smite burns its target at the start of each of its turns (a Constitution save ends it); monsters with Regeneration heal at the start of theirs, unless they took the damage that stops it; a zombie's Undead Fortitude can keep it standing at 1 HP.
 - Concentration saves after damage, and death saves at the start of your turn, are rolled for you. You still get your Luck Dice prompt.
 - Wall spells become real walls that block movement, and sight where the spell says so.
 

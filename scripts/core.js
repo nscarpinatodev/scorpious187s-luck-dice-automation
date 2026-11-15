@@ -679,7 +679,10 @@ Hooks.once("init", () => {
           "And Studied Attacks (Fighter 13: after a miss, advantage on the next attack against that creature) and Elusive " +
           "(Rogue 18: no attack against it has advantage, from any source, unless it's Incapacitated); Grappler (advantage " +
           "against a creature you're grappling); 2024 Potent Cantrip (a cantrip that misses deals half its damage, when the " +
-          "attack automation rolls it). " +
+          "attack automation rolls it); Pack Tactics (an ally within 5 ft of the target); Blur (disadvantage against the " +
+          "blurred creature, unless the attacker has blindsight or truesight); Shining Smite (advantage against it); Mirror " +
+          "Image (a duplicate may take a hit instead: 2024 a d6 per duplicate, 2014 a d20); Sunlight Sensitivity (on a scene " +
+          "marked In Sunlight in its configuration: disadvantage on attacks and checks — 2014: Perception). " +
           "Shown in the roll window and on the card. With Automated Conditions 5e active, the checks it performs are " +
           "left to it, except where its feats differ from the rules (Gunner, 2024 Crossbow Expert).",
     scope: "world",
@@ -698,7 +701,9 @@ Hooks.once("init", () => {
           "Spells: an evoker's Evocation spell with allies in it asks which creatures (up to 1 + the spell's level) succeed " +
           "on the save and take no damage where a success means half (with Save Automation on). Potent Cantrip: a cantrip's " +
           "successful save takes half its damage. 2014 Countercharm: while a bard performs, it and friends within 30 ft have " +
-          "advantage on saves against being charmed or frightened. Staggered (Brutal Strike): disadvantage on the next save. Shown " +
+          "advantage on saves against being charmed or frightened. Staggered (Brutal Strike): disadvantage on the next save. " +
+          "Sanctuary: an attack roll or damaging spell at the warded creature waits for the attacker's Wisdom save; a failure " +
+          "loses that target (the ward ends when the warded creature attacks, casts or deals damage). Shown " +
           "in the roll window and on the card. With Automated Conditions 5e automating statuses, automatic failures are " +
           "left to it.",
     scope: "world",
@@ -801,7 +806,9 @@ Hooks.once("init", () => {
     "Roll a dying character's death save at the start of its turn (on its player's client). Damage at 0 HP is a failed death " +
     "save (two on a critical hit); damage at or past the HP maximum — or massive damage — is death. Luck Dice that turn a " +
     "death save around are recorded properly. Relentless Rage: a raging barbarian dropped to 0 HP makes its Constitution " +
-    "save (DC 10, +5 per use until a rest) and on a success is back at twice its Barbarian level in HP (2014: 1).");
+    "save (DC 10, +5 per use until a rest) and on a success is back at twice its Barbarian level in HP (2014: 1). " +
+    "Monsters: Undead Fortitude (a Constitution save, DC 5 + the damage, to stay at 1 HP — not against radiant damage or a " +
+    "critical hit) and Regeneration (its healing at the start of its turn, unless it took the damage its description names).");
   nativeToggle("clearInstantAreas", "Clear Spell Areas",
     "Remove an instantaneous spell's placed area once the automation has resolved it (left to Flash Rolls 5e when its Remove " +
     "Template option is on), and a concentration spell's area when its concentration ends. Lingering and wall spells' areas " +
@@ -906,6 +913,8 @@ Hooks.once("init", () => {
           "(melee hit), Divine Strike and Primal Strike (weapon hit, once per turn, their damage type chosen) and Colossus " +
           "Slayer (a target missing Hit Points, once per turn) as a choice. Their dice double on a critical hit and apply " +
           "with the hit. Savage Attacker: once per turn, a weapon hit's damage dice are rolled twice and the higher used. " +
+          "The 2024 smites (Searing, Thunderous, Wrathful, Shining) on a melee hit, like Divine Smite — then their effect and " +
+          "save (Thunderous: pushed 10 ft and Prone; Searing burns at the start of the target's turns). " +
           "Stunning Strike: after a Monk weapon or Unarmed Strike hit, offer to spend a Focus Point; the save is rolled by " +
           "the save automation (Full: Stunned on a failure; Speed halved and Advantage on the next attack against it on a success).",
     scope: "world",

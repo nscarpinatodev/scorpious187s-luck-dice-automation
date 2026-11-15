@@ -5,6 +5,7 @@ import { RIDERS_FLAG, SAVAGE_FLAG } from "./riders.mjs";
 import { STUNNING_FLAG } from "./monk.mjs";
 import { STUDIED_FLAG } from "./fighter.mjs";
 import { SCULPT_FLAG } from "./wizard.mjs";
+import { MIRROR_FLAG } from "./illusions.mjs";
 import { REACTIONS_FLAG } from "./reactions.mjs";
 import { ATTACK_REASONS_FLAG, reasonsHTML } from "./advantage.mjs";
 import { MASTERY_RESULT_FLAG } from "./mastery.mjs";
@@ -91,6 +92,8 @@ export function injectNativeHistory(message, html) {
   if (stunning?.text) blocks.push(renderNoteRow("fa-hand-fist", "Stunning Strike", stunning.text));
   const studied = message.getFlag?.(MODULE_ID, STUDIED_FLAG);
   if (studied?.text) blocks.push(renderNoteRow("fa-eye", "Studied Attacks", studied.text));
+  const mirror = message.getFlag?.(MODULE_ID, MIRROR_FLAG);
+  if (mirror?.length) blocks.push(renderNoteRow("fa-clone", "Mirror Image", mirror.join("; ")));
   const sculpt = message.getFlag?.(MODULE_ID, SCULPT_FLAG);
   if (sculpt?.text) blocks.push(renderNoteRow("fa-shapes", "Sculpt Spells", sculpt.text));
   const savage = message.getFlag?.(MODULE_ID, SAVAGE_FLAG);

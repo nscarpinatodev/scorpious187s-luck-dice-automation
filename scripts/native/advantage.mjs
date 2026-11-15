@@ -16,7 +16,8 @@
 //                a reckless creature), Faerie Fire, Guiding Bolt (its mark is used
 //                up by the attack), a Heavy weapon in small or weak hands, Studied
 //                Attacks (fighter.mjs: after a miss, the next attack at that creature);
-//                Grappler (the feat: a creature it's grappling);
+//                Grappler (the feat: a creature it's grappling); Pack Tactics (an ally within
+//                5 ft of the target); Blur on the target (not against blindsight or truesight);
 //                a target with Elusive (Rogue 18) that isn't Incapacitated: no
 //                Advantage from any source;
 //   feats      — Spell Sniper (range; 2024: enemies within 5 ft), Crossbow Expert and
@@ -33,6 +34,7 @@
 
 import { MODULE_ID, debug, escapeHTML, isAttackAdvantageEnabled, isAutoCritsEnabled, isWeaponMasteryEnabled, socket, isLike } from "./shared.mjs";
 import { MASTERY_FLAG } from "./mastery.mjs";
+import { inSunlight, sunlightSensitivity } from "./sunlight.mjs";
 
 export const ATTACK_REASONS_FLAG = "attackReasons";
 export const SAVE_REASONS_FLAG = "saveReasons"; // save-rules.mjs
@@ -298,6 +300,20 @@ function nearbyFoe(fx) {
     && !INCAPACITATING.some(s => t.actor.statuses?.has?.(s)) && tokenDistance(me, t) <= adjacent()) ?? null;
 }
 
+/** Whether a creature has blindsight or truesight (Blur and Mirror Image don't fool it). */
+export function seesThroughIllusions(actor) {
+  const ranges = actor?.system?.attributes?.senses?.ranges ?? actor?.system?.attributes?.senses ?? {};
+  return (Number(ranges.blindsight) || 0) > 0 || (Number(ranges.truesight) || 0) > 0;
+}
+
+/** Pack Tactics: an ally of the attacker, not incapacitated, within 5 ft of the target (the first found), or null. */
+function packmate(fx, target) {
+  const me = fx.attacker;
+  if (!me?.parent || !me.disposition) return null;
+  return [...(me.parent.tokens ?? [])].find(t => t.id !== me.id && t.id !== target.id && t.actor && t.disposition === me.disposition
+    && !INCAPACITATING.some(s => t.actor.statuses?.has?.(s)) && tokenDistance(t, target) <= adjacent()) ?? null;
+}
+
 /**
  * Whether a creature is grappled by this one (the Grappler feat): its Grappled effect came from it. A Grappled
  * status with no source recorded (set from the token HUD) counts when the creature is within 5 ft.
@@ -403,7 +419,16 @@ export function attackReasons(activity, config = {}) {
   }
   if (targetActor && effectsFrom(targetActor, "reckless-attack").length) advantage.push("Target attacking recklessly");
   if (targetActor && effectsFrom(targetActor, "faerie-fire").length) advantage.push("Faerie Fire");
+  // 2024 Shining Smite (smites.mjs): attack rolls against the shining creature have advantage.
+  if (targetActor && effectsFrom(targetActor, "shining-smite").some(e => rulesOf(sourceItem(e)) !== "2014")) advantage.push("Shining Smite");
   if (targetActor && hasFeat(fx.actor, "grappler") && grappledBy(targetActor, fx.actor, distance)) advantage.push("Grappler");
+  // Pack Tactics: an ally of the attacker (not incapacitated) within 5 ft of the target.
+  const pack = target && hasFeat(fx.actor, "pack-tactics") ? packmate(fx, target) : null;
+  if (pack) advantage.push(`Pack Tactics (${pack.name})`);
+  // Sunlight Sensitivity (sunlight.mjs): on a scene the GM marked as in sunlight.
+  if (sunlightSensitivity(fx.actor) && inSunlight(fx.attacker)) disadvantage.push("Sunlight Sensitivity");
+  // Blur: disadvantage against the blurred creature, unless the attacker has blindsight or truesight.
+  if (targetActor && effectsFrom(targetActor, "blur").length && !seesThroughIllusions(fx.actor)) disadvantage.push("Target blurred");
   const bolt = targetActor ? effectsFrom(targetActor, "guiding-bolt")[0] : null;
   if (bolt) { advantage.push("Guiding Bolt"); consume.push(bolt.uuid); }
   addMasteryReasons(fx, { advantage, disadvantage, consume });
@@ -672,6 +697,9 @@ export async function consumeRollMarks(message) {
   return consumeMarks(message?.getFlag?.(MODULE_ID, SAVE_REASONS_FLAG)?.consume);
 }
 
+/** Remove one of the module's marks (or a Mirror Image duplicate): as its owner, else through the primary GM. */
+export const removeMark = (uuid) => consumeMarks([uuid]);
+
 // Marks being removed on this client: a roll can fire two post-roll hooks (a concentration save).
 const consuming = new Set();
 async function consumeMarks(uuids = []) {
@@ -694,6 +722,8 @@ export async function consumeAttackMarkGM({ uuid }) {
   const effect = await fromUuid(uuid);
   if (!effect) return;
   if (isStaggered(effect)) return effect.setFlag(MODULE_ID, STAGGER_USED, true);
+  // A Mirror Image duplicate destroyed (illusions.mjs); a Sanctuary ward ended (sanctuary.mjs).
+  if (["mirror-image", "sanctuary"].includes(sourceItem(effect)?.system?.identifier)) return effect.delete();
   const mastery = effect.getFlag?.(MODULE_ID, MASTERY_FLAG)?.kind;
   if (sourceItem(effect)?.system?.identifier === "guiding-bolt" || ["sap", "vex", "studied-attacks", "stunning-strike", "silvery-barbs"].includes(mastery)) await effect.delete();
 }

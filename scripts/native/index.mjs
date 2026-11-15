@@ -33,13 +33,17 @@ import { applyActivityEffects } from "./effects.mjs";
 import { isPrivateGMCard, shareWithTargets } from "./outcome.mjs";
 import { rayCount, fireRays } from "./projectiles.mjs";
 import { claimRiderUse } from "./riders.mjs";
-import { recordLingeringArea, tagLingeringArea, onTurnChange, onTokenMoved, onRegionChanged } from "./lingering.mjs";
+import { recordLingeringArea, tagLingeringArea, onTurnChange, onTokenMoved, onRegionChanged, isTriggerClient } from "./lingering.mjs";
 import { onEffectCreated, onTurnEndRepeatSaves } from "./repeat-saves.mjs";
 import { answerReaction, pendingReactions, extendReaction, onTurnStartReaction, onCombatEndedReactions } from "./reactions.mjs";
 import { onPreRollAttack, onPreRollDamage, onPreRollDamageFeats, onRenderAttackDialog, consumeAttackMarks, consumeRollMarks, consumeAttackMarkGM } from "./advantage.mjs";
 import { onPreRollSave, onPreRollCheck, onRenderSaveDialog, installAutoFail } from "./save-rules.mjs";
 import { installCounterspell } from "./counterspell.mjs";
+import { installSanctuary, onPreApplyDamageSanctuary } from "./sanctuary.mjs";
+import { onRenderSceneConfig } from "./sunlight.mjs";
 import { onCountercharmUsed } from "./bard.mjs";
+import { onTurnStartSearing } from "./smites.mjs";
+import { onPreApplyDamageMonsters, onDamageAppliedMonsters, onTurnStartRegeneration } from "./monsters.mjs";
 import { rollExtras, markBoostTargets, markBardicGM, consumeBoostGM, endBoostSpellGM } from "./boosts.mjs";
 import { onPreRollAttackInvocations, onPreRollDamageInvocations, onDamageAppliedGift, onTurnStartCloak, onMaddeningHexUsed } from "./invocations.mjs";
 import { onPreUseMetamagic, onRenderUsageDialog, onMetamagicUsed, onPreRollDamageMetamagic, onPreRollConcentrationMetamagic } from "./metamagic.mjs";
@@ -66,6 +70,8 @@ Hooks.once("ready", () => {
   installAutoFail();
   // Counterspell: a spell's use waits for it (each activity type's consume, wrapped).
   installCounterspell();
+  // Sanctuary: attack rolls and damaging spells at a warded creature wait for the attacker's Wisdom save.
+  installSanctuary();
   // Bardic Inspiration, Lucky… in the shared prompts — also the roll-request window's (skill-check.js).
   LDA.rollExtras = rollExtras;
 
@@ -153,7 +159,8 @@ Hooks.once("ready", () => {
   Hooks.on("renderAttackRollConfigurationDialog", onRenderAttackDialog);
   // Saving throw rules (concentration saves too): advantage, Aura of Protection, automatic failures. Never cancels.
   Hooks.on("dnd5e.preRollSavingThrowV2", onPreRollSave);
-  Hooks.on("dnd5e.preRollAbilityCheckV2", onPreRollCheck); // Silvery Barbs' advantage on checks, skills and tools
+  Hooks.on("dnd5e.preRollAbilityCheckV2", onPreRollCheck); // Silvery Barbs' advantage, Sunlight Sensitivity on checks, skills and tools
+  Hooks.on("renderSceneConfig", onRenderSceneConfig);      // the scene's "In Sunlight" checkbox
   Hooks.on("renderD20RollConfigurationDialog", onRenderSaveDialog);
   // The last word on whether a roll shows its window (after every type-specific preRoll hook). Never cancels.
   Hooks.on("dnd5e.preRollV2", finalRollDialog);
@@ -195,6 +202,9 @@ Hooks.once("ready", () => {
     onActorUpdatedAgathys(actor, changes).catch(err => console.error(`[${MODULE_ID}] armor of agathys:`, err)));
   Hooks.on("dnd5e.preApplyDamage", onPreApplyDamage); // synchronous; never cancels
   Hooks.on("dnd5e.preApplyDamage", onPreApplyDamageRelentless); // after the death saves' (massive damage); never cancels
+  Hooks.on("dnd5e.preApplyDamage", onPreApplyDamageMonsters);   // Undead Fortitude, Regeneration's blocking damage; never cancels
+  Hooks.on("dnd5e.preApplyDamage", onPreApplyDamageSanctuary);  // a warded creature dealing damage ends its ward; never cancels
+  Hooks.on("dnd5e.applyDamage", (actor) => onDamageAppliedMonsters(actor).catch(err => console.error(`[${MODULE_ID}] undead fortitude:`, err)));
   Hooks.on("dnd5e.applyDamage", (actor) => onDamageAppliedDeath(actor).catch(err => console.error(`[${MODULE_ID}] death:`, err)));
   // Relentless Rage first: a barbarian back on its feet doesn't need Gift of the Protectors.
   Hooks.on("dnd5e.applyDamage", (actor) => onDamageAppliedRelentless(actor)
@@ -204,6 +214,10 @@ Hooks.once("ready", () => {
   Hooks.on("dnd5e.restCompleted", (actor) => onRestRelentless(actor).catch(err => console.error(`[${MODULE_ID}] relentless rage:`, err)));
   Hooks.on("combatTurnChange", (combat, prior, current) =>
     onTurnStartCloak(combat, current).catch(err => console.error(`[${MODULE_ID}] cloak of flies:`, err)));
+  Hooks.on("combatTurnChange", (combat, prior, current) =>
+    onTurnStartSearing(combat, current, { isTrigger: isTriggerClient }).catch(err => console.error(`[${MODULE_ID}] searing smite:`, err))
+      .then(() => onTurnStartRegeneration(combat, current, { isTrigger: isTriggerClient }))
+      .catch(err => console.error(`[${MODULE_ID}] regeneration:`, err)));
   Hooks.on("dnd5e.postRollDeathSave", onPostRollDeathSave);
   Hooks.on("preDeleteRegion", onPreDeleteRegion); // returns false only to keep a lingering area or a wall spell's
   Hooks.on("deleteRegion", (region) => onRegionDeletedWalls(region).catch(err => console.error(`[${MODULE_ID}] wall spells:`, err)));

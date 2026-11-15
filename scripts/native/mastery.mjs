@@ -341,7 +341,7 @@ export async function applyWeaponMastery(message, activity) {
     return;
   }
   const evaluated = message.system.evaluatedTargets ?? [];
-  const hits = evaluated.filter(t => !t.isMiss), misses = evaluated.filter(t => t.isMiss);
+  const hits = evaluated.filter(t => !t.isMiss), misses = evaluated.filter(t => t.isMiss && Number.isFinite(t.ac)); // not a Mirror Image duplicate's
   let text = null;
   if (kind === "graze") text = await graze(message, activity, misses);
   else if (!hits.length) return;

@@ -28,6 +28,7 @@ import { MODULE_ID, debug, escapeHTML, isOnHitRidersEnabled, isInvocationsEnable
 import { tokenDistance, rulesOf } from "./advantage.mjs";
 import { isPactWeapon } from "./invocations.mjs";
 import { applyMasteryChange } from "./mastery.mjs";
+import { smiteAfter } from "./smites.mjs";
 
 export const RIDERS_FLAG = "riders";
 
@@ -64,6 +65,14 @@ export const RIDERS = {
       return unholy ? all.slice(0, 2) : all.slice(0, 1);
     }
   },
+  // The 2024 smite spells (smites.mjs): cast right after a melee weapon or Unarmed Strike hit, like Divine Smite;
+  // their effect and save follow. 2014 Branding Smite (cast beforehand) is left to dnd5e.
+  ...Object.fromEntries(["searing-smite", "thunderous-smite", "wrathful-smite", "shining-smite"].map(id => [id, {
+    mode: "choose", checked: false,
+    eligible: ({ activity, card }) => isWeaponAttack(activity) && isMelee(activity, card),
+    activities: (item) => rulesOf(item) === "2014" ? [] : damageActivities(item).slice(0, 1),
+    after: smiteAfter
+  }])),
   "eldritch-smite": {
     mode: "choose", checked: false, oncePerTurn: true, setting: isInvocationsEnabled,
     eligible: ({ activity }) => isPactWeapon(activity),
@@ -332,6 +341,7 @@ async function riderActivity(choice, activity) {
   try {
     const results = await activity.use({ subsequentActions: true }, {}, {});
     if (!results) return null;
+    choice.usage = results.message ?? null; // its card, for what follows (a smite's effect and save)
     return await Promise.race([claimed, new Promise(r => setTimeout(() => r(null), 1000))]);
   } finally {
     pendingRiderUses.delete(choice.item.id);
