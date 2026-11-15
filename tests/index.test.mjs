@@ -17,11 +17,12 @@ const item = (identifier) => ({ name: identifier, system: { identifier }, scalin
 test("ready registers native mode's hooks", () => {
   for (const name of ["renderChatMessageHTML", "dnd5e.renderChatMessage", "dnd5e.rollDamageV2",
     "dnd5e.rollSavingThrow", "dnd5e.rollConcentrationV2", "dnd5e.rollAbilityCheck", "dnd5e.rollSkillV2",
-    "dnd5e.rollToolCheckV2", "dnd5e.postUseActivity", "createChatMessage", "preMoveToken", "moveToken", "updateRegion",
+    "dnd5e.rollToolCheckV2", "dnd5e.postUseActivity", "createChatMessage", "moveToken", "updateRegion",
     "createActiveEffect", "deleteCombat"]) {
     assert.equal(hooks.count(name), 1, name);
   }
-  assert.equal(hooks.count("combatTurnChange"), 5);                  // reactions back; disengage + summary + death saves; lingering + repeat saves; Cloak of Flies; Searing Smite
+  assert.equal(hooks.count("preMoveToken"), 2);                      // opportunity attacks; a planned teleport's blink
+  assert.equal(hooks.count("combatTurnChange"), 5);                 // reactions back; disengage + summary + death saves; lingering + repeat saves; Cloak of Flies; Searing Smite
   assert.equal(hooks.count("dnd5e.rollAttackV2"), 2);                // marks used up; Luck Dice + automation
   assert.equal(hooks.count("dnd5e.preRollAttackV2"), 4);             // solid walls; advantage reasons; skip the window; Improved Pact Weapon
   assert.equal(hooks.count("dnd5e.preUseActivity"), 2);              // solid walls; Metamagic's casting window

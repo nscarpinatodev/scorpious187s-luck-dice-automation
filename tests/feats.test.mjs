@@ -8,7 +8,7 @@ import { featMarkReasons, helpCheckMark, crusherCanMove, damageTypesOf, onPreRol
 import { saveReasons } from "../scripts/native/save-rules.mjs";
 import { boostsFor } from "../scripts/native/boosts.mjs";
 import { cunningOptions, cunningAffordable, sneakDice } from "../scripts/native/cunning.mjs";
-import { teleportNeeds, teleportProblem, onPreTeleport, onTeleport } from "../scripts/native/teleport.mjs";
+import { teleportNeeds, teleportProblem, onPreTeleport, onTeleport, onPostTeleport, onPreMoveTokenTeleport, onTeleportUsed, teleportRange, teleportSpots, spotAt, aaTeleports } from "../scripts/native/teleport.mjs";
 
 const { settings, makeToken, prompts, uuids, rollResults, notes } = env;
 const MODULE_ID = "scorpious187s-luck-dice-automation";
@@ -249,9 +249,9 @@ test("teleport range: too far, a taken space, out of sight — each turned down,
   onPreTeleport(misty, { maxDistance: 30 });
   assert.equal(onTeleport(misty, [{ token: me.token, plan: plan(0, 400) }]), undefined);
   assert.equal(onTeleport(misty, [{ token: me.token, plan: plan(900, 0) }]), false);
-  assert.ok(notes.some(n => /can't go there/.test(n)));
   await new Promise(r => setTimeout(r, 80));
-  assert.equal(misty.planned, 1);
+  assert.ok(notes.some(n => /can't go there/.test(n)));
+  assert.equal(misty.planned, 1);                                            // no canvas to click here: dnd5e's placement
   settings.teleportRange = false;
   assert.equal(onTeleport(misty, [{ token: me.token, plan: plan(900, 0) }]), undefined);
 });
@@ -270,4 +270,84 @@ test("a push stops short of a creature in the way; Crusher moves to the farthest
   const dest = crusherDestination(fighter.doc, dummy.doc);
   assert.equal(dest.x, 400);                                                // a diagonal, still away from the fighter
   assert.notEqual(dest.y, 500);
+});
+
+test("teleport range: the blink movement itself is checked while its teleport is planned (a quick click skips Foundry's limit)", async () => {
+  settings.teleportRange = true;
+  const me = creature("Me", 0, 0, { disposition: 1 });
+  const misty = { item: { name: "Misty Step", system: { description: { value: "You teleport up to 30 feet to an unoccupied space you can see." } } },
+    description: {}, planned: 0, async planTeleport() { this.planned++; } };
+  const blink = (x, y) => ({ origin: { x: 0, y: 0, width: 1, height: 1 }, destination: { x, y, width: 1, height: 1, action: "blink" },
+    pending: { waypoints: [{ x, y, action: "blink" }] } });
+  assert.equal(onPreMoveTokenTeleport(me.doc, blink(900, 0)), undefined);            // no teleport planned: any move
+  onPreTeleport(misty, { maxDistance: 30, tokens: [me.token] });
+  assert.equal(onPreMoveTokenTeleport(me.doc, { ...blink(900, 0), pending: { waypoints: [{ x: 900, y: 0, action: "walk" }] } }), undefined);
+  assert.equal(onPreMoveTokenTeleport(me.doc, blink(900, 0)), false);
+  await new Promise(r => setTimeout(r, 80));
+  assert.ok(notes.some(n => /35|45 ft away; it reaches 30/.test(n)));
+  assert.equal(misty.planned, 1);
+  assert.equal(onPreMoveTokenTeleport(me.doc, blink(500, 0)), undefined);            // 25 ft: fine
+  onPostTeleport(misty, [{ token: me.token }]);
+  assert.equal(onPreMoveTokenTeleport(me.doc, blink(900, 0)), undefined);            // made: moves freely again
+  onPreTeleport(misty, { maxDistance: 30, tokens: [me.token] });
+  onTeleport(misty, []);                                                             // cancelled
+  assert.equal(onPreMoveTokenTeleport(me.doc, blink(900, 0)), undefined);
+});
+
+test("teleport range: after a Teleport activity is used, another module's displace (Automated Animations) is held to it too", async () => {
+  settings.teleportRange = true;
+  const me = creature("Me", 0, 0, { disposition: 1 });
+  const activity = { type: "teleport", teleport: { value: 30, units: "ft" }, actor: me.actor, getUsageToken: () => me.token,
+    item: { name: "Misty Step", system: { description: { value: "You teleport up to 30 feet to an unoccupied space you can see." } } },
+    description: {}, planned: 0, async planTeleport() { this.planned++; } };
+  assert.equal(teleportRange(activity, { grid: { units: "ft" } }), 30);
+  const displace = (x, y) => ({ method: "api", origin: { x: 0, y: 0 }, destination: { x, y }, passed: { waypoints: [{ x, y, action: "displace" }] }, pending: { waypoints: [] } });
+  assert.equal(onPreMoveTokenTeleport(me.doc, displace(1100, 1000)), undefined);       // nothing used yet
+  onTeleportUsed(activity);
+  assert.equal(onPreMoveTokenTeleport(me.doc, displace(1100, 1000), { [MODULE_ID]: { forced: true } }), undefined); // this module's push
+  assert.equal(onPreMoveTokenTeleport(me.doc, displace(1100, 1000)), false);
+  await new Promise(r => setTimeout(r, 80));
+  assert.equal(activity.planned, 1);                                                   // dnd5e's placement to pick again
+  assert.equal(onPreMoveTokenTeleport(me.doc, displace(500, 300)), undefined);         // 25 ft: made
+  assert.equal(onPreMoveTokenTeleport(me.doc, displace(1100, 1000)), undefined);       // and then moves freely again
+});
+
+test("teleport range: the spaces it can land on — in range, unoccupied, in sight", () => {
+  const me = creature("Me", 5, 5, { disposition: 1 });
+  creature("Other", 6, 5);
+  const spots = teleportSpots(me.doc, 10, { unoccupied: true, sight: true });
+  assert.equal(spots.length, 23);                                            // 5×5 around it, less itself and the other
+  assert.ok(!spots.some(s => s.x === 600 && s.y === 500));
+  assert.ok(spots.some(s => s.x === 700 && s.y === 700));                    // 10 ft diagonally
+  sightBlocked = true;
+  assert.equal(teleportSpots(me.doc, 10, { sight: true }).length, 0);
+  assert.equal(teleportSpots(me.doc, 10, {}).length, 24);
+});
+
+test("teleport range: a click picks the grid space under it (centred on it, for a bigger token)", () => {
+  const saved = { getOffset: canvas.grid.getOffset, getTopLeftPoint: canvas.grid.getTopLeftPoint };
+  canvas.grid.getOffset = ({ x, y }) => ({ i: Math.floor(y / 100), j: Math.floor(x / 100) });
+  canvas.grid.getTopLeftPoint = ({ i, j }) => ({ x: j * 100, y: i * 100 });
+  assert.deepEqual(spotAt({ width: 1, height: 1 }, { x: 456, y: 789 }), { x: 400, y: 700 });
+  assert.deepEqual(spotAt({ width: 3, height: 3 }, { x: 456, y: 789 }), { x: 300, y: 600 });
+  Object.assign(canvas.grid, saved);
+});
+
+test("Automated Animations: a teleportation preset matched by name (partial or exact, less excluded terms), or the item's own", () => {
+  const presets = [{ label: "Misty Step", presetType: "teleportation", advanced: { exactMatch: false, excludedTerms: ["Mistier"] } },
+    { label: "Fireball", presetType: "proToTemp", advanced: {} }];
+  const getSetting = game.settings.get;
+  game.settings.get = (scope, key) => scope === "autoanimations" && key === "aaAutorec-preset" ? presets : getSetting(scope, key);
+  assert.equal(aaTeleports({ name: "Misty Step" }), false);                            // AA not active
+  game.modules.set("autoanimations", { active: true });
+  assert.equal(aaTeleports({ name: "Misty Step" }), true);
+  assert.equal(aaTeleports({ name: "Misty Step (Steps of the Fey)" }), true);
+  assert.equal(aaTeleports({ name: "Mistier Misty Step" }), false);
+  assert.equal(aaTeleports({ name: "Fireball" }), false);
+  assert.equal(aaTeleports({ name: "Misty Step", flags: { autoanimations: { isEnabled: false } } }), false);
+  assert.equal(aaTeleports({ name: "Blink Away", flags: { autoanimations: { isCustomized: true, menu: "preset", presetType: "teleportation" } } }), true);
+  presets[0].advanced.exactMatch = true;
+  assert.equal(aaTeleports({ name: "Misty Step (Steps of the Fey)" }), false);
+  game.modules.delete("autoanimations");
+  game.settings.get = getSetting;
 });

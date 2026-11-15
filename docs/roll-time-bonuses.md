@@ -114,7 +114,7 @@ These are the only things you'll see happen without rolling anything yourself.
 
 - Opportunity attacks are offered when a creature moves out of reach. With Polearm Master you're also offered an attack when a creature comes into your reach. With Sentinel, a hit stops the creature for the rest of its turn; with the 2024 feat an enemy within 5 ft that Disengages, or hits someone else, provokes an attack from you too. With the 2014 Mage Slayer, a creature within 5 ft that casts a spell can be attacked.
 - After Cunning Strike's Withdraw, your next move (up to half your Speed) provokes no opportunity attacks.
-- A Teleport button that lands too far away, on another creature, or (for Misty Step and the like) somewhere you can't see is turned down, and you pick again. *(Teleport Range)*
+- When you use a teleport (Misty Step and the like), the spaces you can land on are highlighted. A spot too far away, on another creature, or (where the spell says so) out of sight is turned down, whether you use dnd5e's Teleport button or an animation module's, and you pick again. *(Teleport Range)*
 - Lingering spell areas, such as Spirit Guardians or Cloud of Daggers, affect creatures as they move into them or take turns in them, following each spell's wording.
 - Repeat saves against a condition are rolled at the end of your turn.
 - Searing Smite burns its target at the start of each of its turns (a Constitution save ends it); monsters with Regeneration heal at the start of theirs, unless they took the damage that stops it; a zombie's Undead Fortitude can keep it standing at 1 HP.

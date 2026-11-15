@@ -840,9 +840,12 @@ Hooks.once("init", () => {
     "(Wall of Force, Stone, Ice; Forcecage's box) give total cover: no attacking or casting at creatures behind them, and " +
     "area spells stop at them.");
   nativeToggle("teleportRange", "Teleport Range",
-    "dnd5e's Teleport button (Misty Step, Fey Step, Thunder Step, Dimension Door…) stops a drag at the spell's range, but a " +
-    "click on the canvas can land anywhere. This checks where the teleport would land before the token moves: beyond the " +
-    "range, onto another creature, or (for a teleport to a space you can see) out of sight, and it's turned down and you pick again.");
+    "When a creature uses a Teleport activity (Misty Step, Fey Step, Thunder Step, Dimension Door…), its player sees the " +
+    "spaces it can land on highlighted — in range, unoccupied, and in sight where the spell says so (a circle for long " +
+    "ranges). The teleport itself is held to them, whether it's placed with dnd5e's Teleport button or by Automated " +
+    "Animations' teleport presets (whose own range check doesn't work on Foundry 14): a click outside is turned down before " +
+    "AA sees it, so its animation only plays for a teleport that's made. Turned down, you click a highlighted space " +
+    "(right-click or Escape cancels).");
   nativeToggle("turnSummary", "Start-of-Turn Summary",
     "When a creature's turn starts in combat, whisper its owners a summary: effects and their durations, concentration, saves " +
     "due at the end of the turn, lingering areas it's in, death saves, legendary actions and resistances.");

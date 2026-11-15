@@ -45,7 +45,7 @@ import { onCountercharmUsed } from "./bard.mjs";
 import { onTurnStartSearing } from "./smites.mjs";
 import { onPreApplyDamageMonsters, onDamageAppliedMonsters, onTurnStartRegeneration } from "./monsters.mjs";
 import { onPreRollDamageFeatures, onFeatureUsed, onPreApplyDamageWard } from "./features.mjs";
-import { onPreTeleport, onTeleport } from "./teleport.mjs";
+import { onPreTeleport, onTeleport, onPostTeleport, onPreMoveTokenTeleport, onTeleportUsed, redrawTeleportRanges } from "./teleport.mjs";
 import { onPreRollDamagePiercer, onPreApplyDamageMageSlayer, onHelpUsed, help } from "./feats.mjs";
 import { mageSlayerOnCast } from "./opportunity.mjs";
 import { rollExtras, markBoostTargets, markBardicGM, consumeBoostGM, endBoostSpellGM } from "./boosts.mjs";
@@ -247,6 +247,9 @@ Hooks.once("ready", () => {
   // Teleport range: dnd5e's Teleport button lands where a click says; out of range, taken or out of sight is turned down.
   Hooks.on("dnd5e.preTeleport", onPreTeleport); // never cancels
   Hooks.on("dnd5e.teleport", onTeleport);       // returns false only to turn the destination down
+  Hooks.on("dnd5e.postTeleport", onPostTeleport);
+  Hooks.on("canvasReady", redrawTeleportRanges); // where a waiting teleport can go, shown again on the new canvas
+  Hooks.on("preMoveToken", onPreMoveTokenTeleport); // a teleport's move itself (Automated Animations moves it too); false only to stop it
   Hooks.on("updateRegion", (region, changes) =>
     onRegionChanged(region, changes).catch(err => console.error(`[${MODULE_ID}] lingering region:`, err)));
   // dnd5e's concentration prompt when a concentrating creature takes damage.
@@ -274,6 +277,7 @@ Hooks.once("ready", () => {
     onCountercharmUsed(activity).catch(err => console.error(`[${MODULE_ID}] countercharm:`, err)); // 2014: the performance
     onFeatureUsed(activity, usageConfig, results).catch(err => console.error(`[${MODULE_ID}] class features:`, err)); // Empowered Evocation, Brutal Strike, Arcane Ward
     onHelpUsed(activity).catch(err => console.error(`[${MODULE_ID}] help:`, err));
+    try { onTeleportUsed(activity); } catch (err) { console.error(`[${MODULE_ID}] teleport:`, err); } // its range, for whoever moves the token
     mageSlayerOnCast(activity).catch(err => console.error(`[${MODULE_ID}] mage slayer:`, err)); // 2014: a reaction attack at the caster
     recordAgathys(activity, usageConfig).catch(err => console.error(`[${MODULE_ID}] armor of agathys:`, err));
     markBoostTargets(activity, results).catch(err => console.error(`[${MODULE_ID}] roll boosts:`, err));
