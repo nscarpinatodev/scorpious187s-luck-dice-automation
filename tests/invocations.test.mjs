@@ -75,6 +75,11 @@ test("Agonizing Blast: Eldritch Blast's damage gains the Charisma modifier, once
   warlock.actor.items.push(blast, fireBolt);
   assert.deepEqual(damage(blast), ["1d10"]);
   assert.deepEqual(damage(fireBolt, ["1d10", "@abilities.cha.mod"]), ["1d10", "@abilities.cha.mod"]);
+  // In antimagic (dnd5e 6.1.1 suppresses the enchantment, so its bonus is gone from the roll): nothing added back.
+  assert.deepEqual(damage(fireBolt), ["1d10", "@abilities.cha.mod"]);
+  warlock.actor.statuses.add("antimagic");
+  assert.deepEqual(damage(fireBolt), ["1d10"]);
+  warlock.actor.statuses.delete("antimagic");
   warlock.actor.items.length = 1;
   settings.invocations = false;
   assert.deepEqual(damage(blast), ["1d10"]);

@@ -23,7 +23,7 @@ import { isTriggerClient } from "./lingering.mjs";
 import { applyMasteryChange, masteryEffect, pushDestination, pullDestination, attackerToken } from "./mastery.mjs";
 import { askReaction } from "./reactions.mjs";
 import { pickCreatures } from "./targeting.mjs";
-import { MODULE_ID, debug, escapeHTML, promptChoice, isInvocationsEnabled, isLike } from "./shared.mjs";
+import { MODULE_ID, debug, escapeHTML, promptChoice, isInvocationsEnabled, isLike, antimagicStops } from "./shared.mjs";
 
 export const INVOCATION_RESULT_FLAG = "invocationResult"; // on the attack card: what the invocations did
 
@@ -108,8 +108,10 @@ export function onPreRollDamageInvocations(config) {
   if (!actor || !base) return;
   const parts = (base.parts ??= []);
   // The PHB's enchantment adds "@abilities.cha.mod" to the cantrip it marks (dnd5e's damage bonus), so
-  // that one's left alone; with it on another cantrip, Eldritch Blast gets nothing.
-  if (invocationApplies(actor, activity.item, "agonizing-blast", "Agonizing") && !parts.some(p => /abilities\.cha\.mod|@mod\b/.test(String(p)))) {
+  // that one's left alone; with it on another cantrip, Eldritch Blast gets nothing. In antimagic (dnd5e 6.1.1
+  // suppresses the enchantment there) nothing is added either: no bonus where its spell can't work.
+  if (!antimagicStops(actor, activity.item) && invocationApplies(actor, activity.item, "agonizing-blast", "Agonizing")
+    && !parts.some(p => /abilities\.cha\.mod|@mod\b/.test(String(p)))) {
     parts.push("@abilities.cha.mod");
     debug(`agonizing blast: ${actor.name}'s ${activity.item.name} adds the Charisma modifier`);
   }
@@ -125,6 +127,7 @@ export function eldritchSpearRange(activity) {
   const actor = activity?.actor, item = activity?.item;
   const spear = isInvocationsEnabled() ? feature(actor, "eldritch-spear") : null;
   if (!spear || !isLike(activity, "attack") || !isEldritchBlast(item) || enchantedBy(item, "eldritch-spear", "Eldritch Spear")) return null;
+  if (antimagicStops(actor, item)) return null; // dnd5e 6.1.1 suppresses the enchantment there: no range of its own either
   const range = activity.range ?? {};
   const mult = conduitMultiplier(item);
   if (rulesOf(spear) === "2014") return { value: 300 * mult, units: "ft" };
