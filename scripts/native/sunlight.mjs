@@ -25,7 +25,10 @@ export function onRenderSceneConfig(app, element) {
   const root = element instanceof HTMLElement ? element : element?.[0];
   const scene = app?.document;
   if (!root || !scene || root.querySelector(`[name="flags.${MODULE_ID}.${SUNLIGHT_FLAG}"]`)) return;
-  const anchor = root.querySelector('[data-tab="basics"], [data-tab="basic"], .tab[data-group="sheet"]') ?? root.querySelector("form");
+  // A tab's content panel (`.tab`), never its button in the navigation, which carries the same data-tab. With the
+  // other lighting settings (Environment) where there is such a tab; else the first tab's panel.
+  const panel = (tab) => root.querySelector(`.tab[data-tab="${tab}"]:not(nav *):not(a):not(button)`);
+  const anchor = panel("environment") ?? panel("lighting") ?? panel("basics") ?? panel("basic");
   if (!anchor) return;
   const group = document.createElement("div");
   group.className = "form-group";
