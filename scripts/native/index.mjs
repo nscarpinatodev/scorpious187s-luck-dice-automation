@@ -45,6 +45,7 @@ import { onCountercharmUsed } from "./bard.mjs";
 import { onTurnStartSearing } from "./smites.mjs";
 import { onPreApplyDamageMonsters, onDamageAppliedMonsters, onTurnStartRegeneration } from "./monsters.mjs";
 import { onPreRollDamageFeatures, onFeatureUsed, onPreApplyDamageWard } from "./features.mjs";
+import { onPersistentCreated, onTurnStartPersistent, persistentDamage } from "./persistent.mjs";
 import { onPreTeleport, onTeleport, onPostTeleport, onPreMoveTokenTeleport, onTeleportUsed, redrawTeleportRanges } from "./teleport.mjs";
 import { onPreRollDamagePiercer, onPreApplyDamageMageSlayer, onHelpUsed, help } from "./feats.mjs";
 import { mageSlayerOnCast } from "./opportunity.mjs";
@@ -79,6 +80,8 @@ Hooks.once("ready", () => {
   // Bardic Inspiration, Lucky… in the shared prompts — also the roll-request window's (skill-check.js).
   LDA.rollExtras = rollExtras;
   // The Help action, for a macro: LDA.help() helps from the selected token.
+  // Persistent damage, for a macro: LDA.persistentDamage() asks once and puts it on the selected tokens.
+  LDA.persistentDamage = (tokens = null) => persistentDamage(tokens).catch(err => console.error(`[${MODULE_ID}] persistent damage:`, err));
   LDA.help = (token = canvas.tokens?.controlled?.[0]) => help(token).catch(err => console.error(`[${MODULE_ID}] help:`, err));
 
   // Socket work between clients, via scorpious187s-lib's router. "gm" handlers run
@@ -227,7 +230,9 @@ Hooks.once("ready", () => {
   Hooks.on("combatTurnChange", (combat, prior, current) =>
     onTurnStartSearing(combat, current, { isTrigger: isTriggerClient }).catch(err => console.error(`[${MODULE_ID}] searing smite:`, err))
       .then(() => onTurnStartRegeneration(combat, current, { isTrigger: isTriggerClient }))
-      .catch(err => console.error(`[${MODULE_ID}] regeneration:`, err)));
+      .catch(err => console.error(`[${MODULE_ID}] regeneration:`, err))
+      .then(() => onTurnStartPersistent(combat, current, { isTrigger: isTriggerClient }))
+      .catch(err => console.error(`[${MODULE_ID}] persistent damage:`, err)));
   Hooks.on("dnd5e.postRollDeathSave", onPostRollDeathSave);
   Hooks.on("preDeleteRegion", onPreDeleteRegion); // returns false only to keep a lingering area or a wall spell's
   Hooks.on("deleteRegion", (region) => onRegionDeletedWalls(region).catch(err => console.error(`[${MODULE_ID}] wall spells:`, err)));
@@ -240,6 +245,9 @@ Hooks.once("ready", () => {
       .catch(err => console.error(`[${MODULE_ID}] repeat saves:`, err)));
   Hooks.on("createActiveEffect", (effect) =>
     onEffectCreated(effect).catch(err => console.error(`[${MODULE_ID}] repeat saves:`, err)));
+  // The Persistent Damage status turned on from the token HUD: ask what it deals.
+  Hooks.on("createActiveEffect", (effect, options, userId) =>
+    onPersistentCreated(effect, options, userId).catch(err => console.error(`[${MODULE_ID}] persistent damage:`, err)));
   Hooks.on("moveToken", (tokenDoc, movement) => {
     onTokenMoved(tokenDoc, movement).catch(err => console.error(`[${MODULE_ID}] lingering move:`, err));
   });

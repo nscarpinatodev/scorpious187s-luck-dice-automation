@@ -118,6 +118,7 @@ These are the only things you'll see happen without rolling anything yourself.
 - Lingering spell areas, such as Spirit Guardians or Cloud of Daggers, affect creatures as they move into them or take turns in them, following each spell's wording.
 - Repeat saves against a condition are rolled at the end of your turn.
 - Searing Smite burns its target at the start of each of its turns (a Constitution save ends it); monsters with Regeneration heal at the start of theirs, unless they took the damage that stops it; a zombie's Undead Fortitude can keep it standing at 1 HP.
+- Persistent damage (burning, bleeding, acid and the like, set up by your GM) is rolled and applied at the start of each of your turns until the effect is removed. *(Persistent Damage)*
 - Concentration saves after damage, and death saves at the start of your turn, are rolled for you. You still get your Luck Dice prompt.
 - Wall spells become real walls that block movement, and sight where the spell says so.
 

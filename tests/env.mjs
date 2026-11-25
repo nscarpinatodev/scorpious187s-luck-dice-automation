@@ -9,7 +9,7 @@ const MODULE_ID = "scorpious187s-luck-dice-automation";
 export const settings = {
   attackAutomation: "off", saveAutomation: "off", privateRollOutcome: "private",
   effectAutomation: false, healingAutomation: false, damageOnlyAutomation: false,
-  concentrationBreak: false, concentrationAutoRoll: false, onHitRiders: false, lingeringAreas: false, repeatSaves: false, reactionPrompts: "off", skipAttackDialog: false, attackAdvantage: false, legendaryResistance: "off", weaponMastery: false, autoCrits: false, opportunityAttacks: false, retaliation: false, deathSaves: false, clearInstantAreas: false, turnSummary: false, wallSpells: false, teleportRange: false, rayAutomation: false, targetConfirmation: "off", saveRules: false, rollBoosts: false, invocations: false, metamagic: false,
+  concentrationBreak: false, concentrationAutoRoll: false, onHitRiders: false, lingeringAreas: false, repeatSaves: false, reactionPrompts: "off", skipAttackDialog: false, attackAdvantage: false, legendaryResistance: "off", weaponMastery: false, autoCrits: false, opportunityAttacks: false, retaliation: false, deathSaves: false, clearInstantAreas: false, turnSummary: false, wallSpells: false, teleportRange: false, persistentDamage: false, rayAutomation: false, targetConfirmation: "off", saveRules: false, rollBoosts: false, invocations: false, metamagic: false,
   luckDice: true, inspiration: false,
   dnd5e: { disableConcentration: false, allowPlayerDamageTray: false }
 };
@@ -173,7 +173,7 @@ const LDA = {
   isEffectAutomationEnabled: () => settings.effectAutomation, isHealingAutomationEnabled: () => settings.healingAutomation,
   isDamageOnlyAutomationEnabled: () => settings.damageOnlyAutomation, isConcentrationBreakEnabled: () => settings.concentrationBreak, isConcentrationAutoRollEnabled: () => settings.concentrationAutoRoll, isOnHitRidersEnabled: () => settings.onHitRiders, isLingeringAreasEnabled: () => settings.lingeringAreas, isRepeatSavesEnabled: () => settings.repeatSaves, getReactionPrompts: () => settings.reactionPrompts, isSkipAttackDialogEnabled: () => settings.skipAttackDialog, isAttackAdvantageEnabled: () => settings.attackAdvantage, getLegendaryResistance: () => settings.legendaryResistance,
   isWeaponMasteryEnabled: () => settings.weaponMastery, isAutoCritsEnabled: () => settings.autoCrits,
-  isOpportunityAttacksEnabled: () => settings.opportunityAttacks, isRetaliationEnabled: () => settings.retaliation, isDeathSavesEnabled: () => settings.deathSaves, isClearInstantAreasEnabled: () => settings.clearInstantAreas, isTurnSummaryEnabled: () => settings.turnSummary, isWallSpellsEnabled: () => settings.wallSpells, isTeleportRangeEnabled: () => settings.teleportRange,
+  isOpportunityAttacksEnabled: () => settings.opportunityAttacks, isRetaliationEnabled: () => settings.retaliation, isDeathSavesEnabled: () => settings.deathSaves, isClearInstantAreasEnabled: () => settings.clearInstantAreas, isTurnSummaryEnabled: () => settings.turnSummary, isWallSpellsEnabled: () => settings.wallSpells, isTeleportRangeEnabled: () => settings.teleportRange, isPersistentDamageEnabled: () => settings.persistentDamage,
   isRayAutomationEnabled: () => settings.rayAutomation, getTargetConfirmation: () => settings.targetConfirmation,
   isSaveRulesEnabled: () => settings.saveRules, isRollBoostsEnabled: () => settings.rollBoosts,
   isInvocationsEnabled: () => settings.invocations, isMetamagicEnabled: () => settings.metamagic,
@@ -267,7 +267,7 @@ export function reset() {
   Object.assign(settings, {
     attackAutomation: "off", saveAutomation: "off", privateRollOutcome: "private",
     effectAutomation: false, healingAutomation: false, damageOnlyAutomation: false,
-    concentrationBreak: false, concentrationAutoRoll: false, onHitRiders: false, lingeringAreas: false, repeatSaves: false, reactionPrompts: "off", skipAttackDialog: false, attackAdvantage: false, legendaryResistance: "off", weaponMastery: false, autoCrits: false, opportunityAttacks: false, retaliation: false, deathSaves: false, clearInstantAreas: false, turnSummary: false, wallSpells: false, teleportRange: false, rayAutomation: false, targetConfirmation: "off", saveRules: false, rollBoosts: false, invocations: false, metamagic: false
+    concentrationBreak: false, concentrationAutoRoll: false, onHitRiders: false, lingeringAreas: false, repeatSaves: false, reactionPrompts: "off", skipAttackDialog: false, attackAdvantage: false, legendaryResistance: "off", weaponMastery: false, autoCrits: false, opportunityAttacks: false, retaliation: false, deathSaves: false, clearInstantAreas: false, turnSummary: false, wallSpells: false, teleportRange: false, persistentDamage: false, rayAutomation: false, targetConfirmation: "off", saveRules: false, rollBoosts: false, invocations: false, metamagic: false
   });
   settings.dnd5e.disableConcentration = false;
 }

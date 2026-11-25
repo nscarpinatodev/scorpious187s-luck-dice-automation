@@ -436,6 +436,10 @@ function isTeleportRangeEnabled() {
   try { return game.settings.get(MODULE_ID, "teleportRange"); } catch { return false; }
 }
 
+function isPersistentDamageEnabled() {
+  try { return game.settings.get(MODULE_ID, "persistentDamage"); } catch { return false; }
+}
+
 function isRayAutomationEnabled() {
   try { return game.settings.get(MODULE_ID, "rayAutomation"); } catch { return false; }
 }
@@ -846,6 +850,11 @@ Hooks.once("init", () => {
     "Animations' teleport presets (whose own range check doesn't work on Foundry 14): a click outside is turned down before " +
     "AA sees it, so its animation only plays for a teleport that's made. Turned down, you click a highlighted space " +
     "(right-click or Escape cancels).");
+  nativeToggle("persistentDamage", "Persistent Damage",
+    "Damage a creature takes at the start of each of its turns in combat: burning, bleeding, acid and the like. Turn on " +
+    "the Persistent Damage status in the token HUD and you're asked for the amount (a flat number or a dice formula) and " +
+    "the damage type; or run LDA.persistentDamage() from a macro to put it on every selected token. Each turn it's rolled " +
+    "onto a damage card and applied, with resistances as usual, until the effect is removed.");
   nativeToggle("turnSummary", "Start-of-Turn Summary",
     "When a creature's turn starts in combat, whisper its owners a summary: effects and their durations, concentration, saves " +
     "due at the end of the turn, lingering areas it's in, death saves, legendary actions and resistances.");
@@ -1191,7 +1200,7 @@ return {
   whisperLuckRegain, maybeRegainLuckDie,
   isLuckDiceEnabled, isInspirationEnabled, getAttackAutomation, getSaveAutomation, getPrivateRollOutcome,
   isEffectAutomationEnabled, isHealingAutomationEnabled,
-  isDamageOnlyAutomationEnabled, isConcentrationBreakEnabled, isConcentrationAutoRollEnabled, isOnHitRidersEnabled, isLingeringAreasEnabled, isRepeatSavesEnabled, getReactionPrompts, isSkipAttackDialogEnabled, isAttackAdvantageEnabled, getLegendaryResistance, isWeaponMasteryEnabled, isAutoCritsEnabled, isOpportunityAttacksEnabled, isRetaliationEnabled, isDeathSavesEnabled, isClearInstantAreasEnabled, isTurnSummaryEnabled, isWallSpellsEnabled, isTeleportRangeEnabled, isRayAutomationEnabled, getTargetConfirmation, isSaveRulesEnabled, isRollBoostsEnabled, isInvocationsEnabled, isMetamagicEnabled,
+  isDamageOnlyAutomationEnabled, isConcentrationBreakEnabled, isConcentrationAutoRollEnabled, isOnHitRidersEnabled, isLingeringAreasEnabled, isRepeatSavesEnabled, getReactionPrompts, isSkipAttackDialogEnabled, isAttackAdvantageEnabled, getLegendaryResistance, isWeaponMasteryEnabled, isAutoCritsEnabled, isOpportunityAttacksEnabled, isRetaliationEnabled, isDeathSavesEnabled, isClearInstantAreasEnabled, isTurnSummaryEnabled, isWallSpellsEnabled, isTeleportRangeEnabled, isPersistentDamageEnabled, isRayAutomationEnabled, getTargetConfirmation, isSaveRulesEnabled, isRollBoostsEnabled, isInvocationsEnabled, isMetamagicEnabled,
   actorHasInspiration, consumeInspiration, evaluateInspirationReroll,
   HISTORY_FLAG, diceFaces, renderLuckSection, requestRollActors,
   readCardHistory, updateRollCard, recordCardStep, finishCardHistory, cardReporter,

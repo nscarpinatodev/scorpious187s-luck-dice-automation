@@ -18,9 +18,10 @@ test("ready registers native mode's hooks", () => {
   for (const name of ["renderChatMessageHTML", "dnd5e.renderChatMessage", "dnd5e.rollDamageV2",
     "dnd5e.rollSavingThrow", "dnd5e.rollConcentrationV2", "dnd5e.rollAbilityCheck", "dnd5e.rollSkillV2",
     "dnd5e.rollToolCheckV2", "dnd5e.postUseActivity", "createChatMessage", "moveToken", "updateRegion",
-    "createActiveEffect", "deleteCombat"]) {
+    "deleteCombat"]) {
     assert.equal(hooks.count(name), 1, name);
   }
+  assert.equal(hooks.count("createActiveEffect"), 2);                // repeat saves; the Persistent Damage status asking what it deals
   assert.equal(hooks.count("preMoveToken"), 2);                      // opportunity attacks; a planned teleport's blink
   assert.equal(hooks.count("combatTurnChange"), 5);                 // reactions back; disengage + summary + death saves; lingering + repeat saves; Cloak of Flies; Searing Smite
   assert.equal(hooks.count("dnd5e.rollAttackV2"), 2);                // marks used up; Luck Dice + automation
