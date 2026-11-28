@@ -29,7 +29,7 @@ import { rememberAreas, clearAreaGM, tagAreaGM, onPreDeleteRegion, onConcentrati
 import { onTurnStartSummary } from "./turn-summary.mjs";
 import { recordWallSpell, buildWallsGM, onRegionDeletedWalls, onPreUseActivityWalls, onPreRollAttackWalls } from "./walls.mjs";
 import { onConcentrationPrompt, deleteConcentrationPrompt } from "./concentration.mjs";
-import { applyActivityEffects } from "./effects.mjs";
+import { applyActivityEffects, applyUseEffects } from "./effects.mjs";
 import { isPrivateGMCard, shareWithTargets } from "./outcome.mjs";
 import { rayCount, fireRays } from "./projectiles.mjs";
 import { claimRiderUse } from "./riders.mjs";
@@ -289,6 +289,7 @@ Hooks.once("ready", () => {
     mageSlayerOnCast(activity).catch(err => console.error(`[${MODULE_ID}] mage slayer:`, err)); // 2014: a reaction attack at the caster
     recordAgathys(activity, usageConfig).catch(err => console.error(`[${MODULE_ID}] armor of agathys:`, err));
     markBoostTargets(activity, results).catch(err => console.error(`[${MODULE_ID}] roll boosts:`, err));
+    applyUseEffects(activity, results).catch(err => console.error(`[${MODULE_ID}] effects on use:`, err)); // Mage Armor, Bless, Rage: no roll to hang them on
     const followUp = usageConfig?.subsequentActions !== false;
     if (isLike(activity, "heal") || isLike(activity, "damage")) {
       if (followUp && autoRolledEnabled(activity) && needsConfirmation(activity, results)) {

@@ -5,7 +5,7 @@ import { isPrivateGMCard, playerTargets, recordOutcome, outcomeTitle } from "./o
 import { doubledDuration, METAMAGIC_FLAG } from "./metamagic.mjs";
 import { rulesOf } from "./advantage.mjs";
 import { auraOfCourage } from "./features.mjs";
-import { MODULE_ID, getPrivateRollOutcome, isEffectAutomationEnabled, isSaveRulesEnabled, socket, getPrimaryGM, resolveTarget, APPLIED_EFFECTS_FLAG, antimagicStops } from "./shared.mjs";
+import { MODULE_ID, getPrivateRollOutcome, isEffectAutomationEnabled, isSaveRulesEnabled, socket, getPrimaryGM, resolveTarget, APPLIED_EFFECTS_FLAG, antimagicStops, isLike, STOCK_EFFECTS } from "./shared.mjs";
 
 // ── Effect automation ─────────────────────────────────────────────────────────
 // The "effectAutomation" setting: an activity's effects (the ones listed on its
@@ -46,7 +46,16 @@ export async function requestApplyEffects(usage, targets) {
  * _applyEffectToActor, pointed at the usage card — and note what was applied on
  * the card (and on the outcome card, for the GM's private rolls).
  */
-export async function applyActivityEffects({ usageId, targets }) {
+export function applyActivityEffects(payload) {
+  // One at a time: two requests for the same effect on the same creature (a reaction's own, and the one for a
+  // use with no roll) must not both find it missing and create it twice — the second re-enables the first's.
+  const run = applying.then(() => applyEffectsNow(payload));
+  applying = run.catch(err => console.error(`[${MODULE_ID}] applyActivityEffects:`, err));
+  return run;
+}
+let applying = Promise.resolve();
+
+async function applyEffectsNow({ usageId, targets }) {
   const usage = game.messages.get(usageId);
   if (!usage?.system?.getEffects) return;
   const tray = document.createElement("effect-application");
@@ -125,6 +134,54 @@ export async function applyActivityEffects({ usageId, targets }) {
     const activity = usage.getAssociatedActivity?.();
     await recordOutcome(usage.id, { actor: activity?.actor, title: outcomeTitle(activity, usage) }, rows);
   }
+}
+
+// ── Uses with no roll ─────────────────────────────────────────────────────────
+// Mage Armor, Bless, Haste, Rage, a potion: nothing is rolled against anyone, so there's no hit or failed save
+// to hang the effect on — dnd5e leaves it in the usage card's effects tray. With the setting, it's applied when
+// the activity is used:
+//   • to the user alone, when the activity only affects its user (range Self, no area: Shield, Rage);
+//   • otherwise to the creatures targeted;
+//   • with nobody targeted, to the user when the range is Self or Touch (Mage Armor on yourself) — and to no one
+//     for anything with a longer reach (an untargeted Hex doesn't curse its caster).
+// Only when the activity lists exactly one effect: several are a choice (Enhance Ability's, Enlarge or Reduce),
+// which stays with the tray. A reaction is only placed on its own user (Shield). Attacks and saves apply theirs on a hit or a failed save, above and below.
+
+const NO_ROLL_TYPES = ["utility", "heal", "damage"];
+// Used by the module elsewhere, each with its own way of placing the effect.
+const OWN_HANDLING = new Set(["bardic-inspiration", "guidance", "resistance", "brutal-strike"]);
+
+/** Who a no-roll activity's effect goes to: "self", "targets", "targets-or-self" — or null when it isn't the module's to place. */
+export function useEffectAudience(activity) {
+  if (!activity || !NO_ROLL_TYPES.some(type => isLike(activity, type))) return null;
+  if (OWN_HANDLING.has(activity.item?.system?.identifier)) return null;
+  const range = activity.range?.units ?? "";
+  const affects = activity.target?.affects?.type ?? "";
+  const area = !!activity.target?.template?.type;
+  if (affects === "self" || (range === "self" && !area && !affects)) return "self";
+  // A reaction at someone else (Silvery Barbs, Cutting Words) is placed by the reaction prompts, or by hand.
+  if (activity.activation?.type === "reaction") return null;
+  return ["self", "touch"].includes(range) && !area ? "targets-or-self" : "targets";
+}
+
+/** dnd5e.postUseActivity (the user's client): an activity with no attack or save puts its one effect on its creatures. */
+export async function applyUseEffects(activity, results) {
+  if (!isEffectAutomationEnabled() || !activity?.actor?.isOwner) return;
+  const audience = useEffectAudience(activity);
+  const usage = results?.message;
+  if (!audience || typeof usage?.system?.getEffects !== "function") return;
+  const effects = ((await usage.system.getEffects()) ?? []).filter(e => e?.type !== "enchantment");
+  if (effects.length !== 1) return;
+  // dnd5e's stock Disengaged: the module gives its own status for it (opportunity.mjs).
+  if (String(effects[0].uuid ?? "").endsWith(`.ActiveEffect.${STOCK_EFFECTS.disengaged}`)) return;
+  const doc = (token) => token?.document ?? token;
+  const me = doc(activity.getUsageToken?.() ?? activity.actor.token ?? activity.actor.getActiveTokens?.()?.[0]) ?? null;
+  const self = { actor: activity.actor.uuid, token: me?.uuid ?? null, name: me?.name ?? activity.actor.name };
+  const targeted = [...(game.user?.targets ?? [])].map(doc).filter(t => t?.actor)
+    .map(t => ({ actor: t.actor.uuid, token: t.uuid, name: t.name }));
+  const list = audience === "self" ? [self] : targeted.length ? targeted : audience === "targets-or-self" ? [self] : [];
+  if (!list.length) return;
+  await requestApplyEffects(usage, list.map(t => ({ ...t, effectIds: [effects[0].id] })));
 }
 
 /** Attacks: every effect on the usage card goes to each target hit. */

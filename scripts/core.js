@@ -912,8 +912,11 @@ Hooks.once("init", () => {
     name: "Apply Activity Effects",
     hint: "Apply an activity's effects (e.g. Hold Person's Paralyzed) to the targets an attack hits, and to the " +
           "targets that fail its save — and, for effects marked to apply on a successful save, to those who pass. " +
-          "Save results come from Save Automation, which must be set to Full. Effects are applied the way dnd5e's " +
-          "effects tray applies them, so ones tied to concentration end with it.",
+          "Save results come from Save Automation, which must be set to Full. An activity with no attack or save " +
+          "and a single effect (Mage Armor, Bless, Shield, Rage) applies it when used: to its user if it only affects " +
+          "its user, otherwise to the creatures targeted — or, with none targeted, to its user when its range is Self " +
+          "or Touch. A choice of several effects stays in dnd5e's effects tray. Effects are applied the way that tray " +
+          "applies them, so ones tied to concentration end with it.",
     scope: "world",
     config: true,
     type: Boolean,
